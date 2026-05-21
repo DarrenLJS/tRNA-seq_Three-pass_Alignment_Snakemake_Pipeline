@@ -1,0 +1,120 @@
+# =============================================================================
+# config/config.yaml
+# All tunable parameters and file paths for the tRNA-seq pipeline
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Core paths
+# ---------------------------------------------------------------------------
+# Pipeline code lives in your workspace; all data/outputs go to scratch.
+manifest: "/home/s2906787/snakemake_pipeline/sample_manifest.tsv"
+scratch:   "/scratch/s2906787"
+
+# ---------------------------------------------------------------------------
+# Reference paths — all files confirmed present in /scratch/s2906787/references/
+# ---------------------------------------------------------------------------
+references:
+  # -- GRCh38 primary assembly -----------------------------------------------
+  genome_fasta:  "/scratch/s2906787/references/GRCh38.primary_assembly.genome.fa"
+  genome_fai:    "/scratch/s2906787/references/GRCh38.primary_assembly.genome.fa.fai"
+
+  # -- GtRNAdb Hsapi38 files -------------------------------------------------
+  # chr-stripped versions for coordinate consistency with Ensembl FASTA
+  gtrndb_bed:              "/scratch/s2906787/references/hg38-tRNAs_nochr.bed"
+  gtrndb_fasta:            "/scratch/s2906787/references/hg38-tRNAs.fa"
+  gtrndb_mature:           "/scratch/s2906787/references/hg38-mature-tRNAs.fa"
+  gtrndb_filtered:         "/scratch/s2906787/references/hg38-filtered-tRNAs.fa"
+  gtrndb_introns:          "/scratch/s2906787/references/hg38-tRNA-introns_nochr.bed"
+  gtrndb_detailed_out:     "/scratch/s2906787/references/hg38-tRNAs-detailed.out"
+  gtrndb_confidence_out:   "/scratch/s2906787/references/hg38-tRNAs-confidence-set.out"
+  gtrndb_name_map:         "/scratch/s2906787/references/hg38-tRNAs_name_map.txt"
+
+  # -- Pre-tRNA reference (built by rule 00a/00b/00c) -----------------------
+  pretRNA_fasta:         "/scratch/s2906787/references/hg38_pretRNA_flanked50.fa"
+  pretRNA_fasta_spliced: "/scratch/s2906787/references/hg38_pretRNA_spliced.fa"
+  pretRNA_index:         "/scratch/s2906787/references/bowtie2_pretRNA/hg38_pretRNA"
+
+  # -- Anticodon lookup table (built by rule 00d) ---------------------------
+  # Parsed from new GtRNAdb name format: tRNA-Tyr-GTA-1-1 → GTA
+  anticodon_map:  "/scratch/s2906787/references/hg38_tRNA_anticodon_map.tsv"
+
+  # -- miRBase (human) -------------------------------------------------------
+  mirbase_mature_all:  "/scratch/s2906787/references/mature.fa"
+  mirbase_hairpin_all: "/scratch/s2906787/references/hairpin.fa"
+  # Filtered to hsa — built by rule filter_mirbase_human
+  mirbase_mature_hsa:  "/scratch/s2906787/references/mature_hsa.fa"
+  mirbase_hairpin_hsa: "/scratch/s2906787/references/hairpin_hsa.fa"
+
+  # -- mim-tRNAseq (uses its own internal GtRNAdb reference) ----------------
+  mimtrnaseq_species: "Hsapi"
+  mimtrnaseq_genome:  "hg38"
+
+  # -- Bowtie1 genome index (pre-built for miRDeep2 Pass 3) -----------------
+  # Built manually — do NOT let miRDeep2 rebuild this per sample
+  bowtie1_genome_index: "/scratch/s2906787/references/bowtie1_GRCh38/hg38"
+
+  # -- TRAX database (built by rule build_trax_db) --------------------------
+  trax_ref_dir:  "/scratch/s2906787/references/trax_hsapi38"
+
+# ---------------------------------------------------------------------------
+# Trim Galore parameters
+# ---------------------------------------------------------------------------
+trim_galore:
+  # Adapter sequences confirmed from MultiQC report:
+  #   R1: Illumina Universal Adapter
+  #   R2: Illumina Small RNA 3-prime Adapter
+  adapter_r1:   "AGATCGGAAGAGC"
+  adapter_r2:   "TGGAATTCTCGGGTGCCAAGG"
+  min_length:   15      # retain tRFs (minimum 15 nt per proposal Section 3.2)
+  quality:      20      # Phred Q20 5-prime quality trimming
+  cores:        8       # cutadapt threads per sample
+
+# ---------------------------------------------------------------------------
+# mim-tRNAseq (Pass 1) parameters
+# ---------------------------------------------------------------------------
+mimtrnaseq:
+  threads:        16
+  min_cov:        2       # minimum read coverage to retain a cluster
+  max_multi:      4       # maximum multimappers
+  cluster_id:     0.97    # isodecoder clustering identity threshold (97%)
+  snp_tolerance:  0.1     # misincorporation rate threshold for modification inference
+
+# ---------------------------------------------------------------------------
+# Bowtie2 (Pass 2 — pre-tRNA) parameters
+# ---------------------------------------------------------------------------
+bowtie2:
+  threads:    8
+  preset:     "--end-to-end --sensitive"
+  # Allow up to 20 alignments to capture multi-mapping pre-tRNA reads
+  max_align:  20
+
+# ---------------------------------------------------------------------------
+# miRDeep2 (Pass 3) parameters
+# ---------------------------------------------------------------------------
+mirdeep2:
+  threads:  4
+
+# ---------------------------------------------------------------------------
+# TRAX parameters
+# ---------------------------------------------------------------------------
+trax:
+  threads:        8
+  min_unique_cov: 3    # discard tRFs with < 3 uniquely-mapping reads (proposal 3.8)
+
+# ---------------------------------------------------------------------------
+# QC thresholds (used by downstream QC summary rule)
+# ---------------------------------------------------------------------------
+qc_thresholds:
+  min_cca_concordance:  0.70   # target ≥70% of Pass 1 reads passing CCA filter
+  min_replicate_r:      0.95   # Pearson r target within condition groups
+  max_mirna_fraction:   0.20   # flag libraries with >20% miRNA reads
+
+# ---------------------------------------------------------------------------
+# Computational resources (override per rule where needed)
+# ---------------------------------------------------------------------------
+resources:
+  default_threads: 4
+  default_mem_mb:  8000
+  trim_mem_mb:     16000
+  mim_mem_mb:      64000    # mim-tRNAseq is memory-intensive (GSNAP index)
+  bowtie2_mem_mb:  32000
