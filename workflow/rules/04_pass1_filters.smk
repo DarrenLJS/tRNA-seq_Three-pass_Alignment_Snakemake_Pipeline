@@ -44,5 +44,7 @@ rule cca_anticodon_filter:
         f"{SCRATCH}/logs/04_pass1_filters/{{sample}}.log",
     benchmark:
         f"{SCRATCH}/benchmarks/04_pass1_filters/{{sample}}.tsv",
+    conda:
+        "../../envs/environment.yaml"
     script:
         "../scripts/cca_anticodon_filter.py"

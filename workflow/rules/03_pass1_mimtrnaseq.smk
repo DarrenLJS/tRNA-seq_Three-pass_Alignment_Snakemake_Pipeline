@@ -18,10 +18,16 @@
 #   counts/Isoacceptor_counts.txt  → collapsed isoacceptor analysis
 #   mismatch/                      → wobble position 34 modification inference
 #   align/{sample}.bam             → per-sample BAMs for downstream filters
+#
+# Conda environments
+# ------------------
+#   rule mimtrnaseq         → ../../envs/mimseq.yaml      (python=3.7, mimseq)
+#   rule link_mimtrnaseq_bam → ../../envs/environment.yaml (samtools only)
 # =============================================================================
 
 MIM = config["mimtrnaseq"]
-REF = config["references"]
+# NOTE: REF is already defined in 00_reference_prep.smk (same namespace).
+#       Accessing config["references"] directly below to avoid redefinition.
 
 
 def mim_input_r1(cell_line):
@@ -31,50 +37,47 @@ def mim_input_r1(cell_line):
         for s in samples_for(cell_line)
     ]
 
-def mim_input_r2(cell_line):
-    """Return list of trimmed R2 FASTQ paths for all samples of a cell line."""
-    return [
-        f"{SCRATCH}/trimmed/{s}/{s}_val_2.fq.gz"
-        for s in samples_for(cell_line)
-    ]
-
 
 rule mimtrnaseq:
     """
     Run mim-tRNAseq on all samples for one cell line.
 
-    The rule aggregates trimmed FASTQ pairs from all 15 samples of the cell
-    line and passes them to mimseq as comma-separated lists via -1/-2 flags.
-    mim-tRNAseq handles its own GSNAP-based alignment internally.
+    The current mimseq CLI (verified via --help) takes a tab-separated
+    sampledata file as its positional argument:
+        col 1: full path to FASTQ (R1 only for paired-end tRNA-seq)
+        col 2: condition/group name
 
-    NOTE on CLI: mim-tRNAseq (mimseq) expects paired-end inputs as:
-        -1 R1_s1.fq.gz,R1_s2.fq.gz,...  (comma-separated, ordered)
-        -2 R2_s1.fq.gz,R2_s2.fq.gz,...  (same order as -1)
-    Verify against your installed version: `mimseq --help`
+    Conditions are extracted from the trimmed FASTQ filenames:
+        *_c[0-9]* -> "c"  (control)
+        *_p[0-9]* -> "p"  (perturbation/treatment)
 
-    The --out-dir flag is our cell-line-specific output directory; per-sample
-    BAMs appear at {outdir}/align/{sample_basename}.bam
+    IMPORTANT: mimseq requires --out-dir to be a non-existing directory.
+    Snakemake pre-creates {params.outdir} for the sentinel/count outputs,
+    so we point mimseq at a fresh _run/ subdirectory and then copy the
+    required outputs up to the Snakemake-expected paths afterwards.
+
+    Per-sample BAMs land at {outdir}/align/{sample}_val_1.bam, which is
+    where link_mimtrnaseq_bam expects to find them.
     """
     input:
         r1_files = lambda wildcards: mim_input_r1(wildcards.cell_line),
-        r2_files = lambda wildcards: mim_input_r2(wildcards.cell_line),
     output:
-        iso_counts  = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/counts/Isodecoder_counts.txt",
-        isoa_counts = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/counts/Isoacceptor_counts.txt",
-        # Touch file confirming the align/ directory was populated
-        align_done  = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/.align_done",
+        iso_counts    = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/counts/Isodecoder_counts.txt",
+        isoa_counts   = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/counts/Isoacceptor_counts.txt",
+        align_done    = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/.align_done",
         mismatch_done = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/.mismatch_done",
     params:
-        outdir      = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}",
-        species     = REF["mimtrnaseq_species"],
-        genome      = REF["mimtrnaseq_genome"],
-        threads     = MIM["threads"],
-        min_cov     = MIM["min_cov"],
-        max_multi   = MIM["max_multi"],
-        cluster_id  = MIM["cluster_id"],
-        snp_tol     = MIM["snp_tolerance"],
-        r1_csv      = lambda wildcards, input: ",".join(input.r1_files),
-        r2_csv      = lambda wildcards, input: ",".join(input.r2_files),
+        outdir       = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}",
+        # mimseq writes here; must not pre-exist (Snakemake creates outdir above)
+        mimseq_dir   = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/_run",
+        species      = config["references"]["mimtrnaseq_species"],  # 'Hsap' for hg38
+        threads      = MIM["threads"],
+        min_cov      = MIM["min_cov"],
+        max_multi    = MIM["max_multi"],
+        cluster_id   = MIM["cluster_id"],
+        control_cond = "c",                                          # control condition label
+        name         = lambda wildcards: f"{wildcards.cell_line}_tRNAseq",
+        r1_csv       = lambda wildcards, input: ",".join(input.r1_files),
     log:
         f"{SCRATCH}/logs/03_mimtrnaseq/{{cell_line}}.log",
     benchmark:
@@ -82,37 +85,73 @@ rule mimtrnaseq:
     threads: lambda wildcards: MIM["threads"]
     resources:
         mem_mb = config["resources"]["mim_mem_mb"],
+    conda:
+        "../../envs/mimseq.yaml"
     shell:
         r"""
         set -euo pipefail
-        mkdir -p {params.outdir} $(dirname {log})
+        mkdir -p "$(dirname {log})"
 
         echo "[$(date)] Starting mim-tRNAseq for cell line: {wildcards.cell_line}" > {log} 2>&1
-        echo "[$(date)] Samples: {params.r1_csv}" >> {log}
 
-        mimseq \
-            --species      {params.species} \
-            --cluster \
-            --cluster-id   {params.cluster_id} \
-            --threads      {params.threads} \
-            --min-cov      {params.min_cov} \
-            --max-multi    {params.max_multi} \
-            --snp-tolerance {params.snp_tol} \
-            --out-dir      {params.outdir} \
-            -1 {params.r1_csv} \
-            -2 {params.r2_csv} \
-            >> {log} 2>&1
+        # ── Build sample data sheet ──────────────────────────────────────
+        # mimseq takes a tab-separated file: col1=fastq_path, col2=condition.
+        # Condition is extracted from the filename (_c[digit] or _p[digit]).
+        SAMPLESHEET="$(dirname {log})/{wildcards.cell_line}_samplesheet.txt"
+        > "$SAMPLESHEET"
+        for f in $(echo "{params.r1_csv}" | tr ',' '\n'); do
+            COND=$(basename "$f" | sed 's/.*_\([cp]\)[0-9].*/\1/')
+            printf "%s\t%s\n" "$f" "$COND" >> "$SAMPLESHEET"
+        done
+        echo "[$(date)] Sample sheet:" >> {log}
+        cat "$SAMPLESHEET" >> {log}
 
-        # Verify expected outputs exist and create sentinel files
-        echo "[$(date)] Verifying outputs..." >> {log}
+        # ── Run mim-tRNAseq ──────────────────────────────────────────────
+        # Use a fresh _run/ subdir; mimseq requires --out-dir to not exist.
+        rm -rf "{params.mimseq_dir}"
 
-        if [ ! -f "{output.iso_counts}" ]; then
-            echo "ERROR: Isodecoder_counts.txt not found — mim-tRNAseq may have failed." >> {log}
+        # Verify real usearch is on PATH.
+        # mimseq calls `usearch -cluster_fast` then `usearch -sortbysize`.
+        # vsearch does NOT add ;size= annotations during clustering, so the
+        # subsequent sortbysize call fails with exit code 1.  A vsearch symlink
+        # is therefore insufficient — usearch v11 must be installed in the env:
+        #   wget https://drive5.com/downloads/usearch11.0.667_i86linux32.gz
+        #   gunzip usearch11.0.667_i86linux32.gz
+        #   chmod +x usearch11.0.667_i86linux32
+        #   cp usearch11.0.667_i86linux32 $CONDA_PREFIX/bin/usearch
+        if ! command -v usearch &>/dev/null; then
+            echo "[ERROR] usearch not found on PATH. Install usearch v11 in the mimseq conda env." >> {log}
+            echo "[ERROR] See comment in 03_pass1_mimtrnaseq.smk for installation instructions." >> {log}
             exit 1
         fi
+        echo "[$(date)] Using usearch: $(which usearch)" >> {log}
 
-        # Confirm per-sample BAMs exist in align/
-        N_BAMS=$(find {params.outdir}/align/ -name "*.bam" | wc -l)
+        mimseq \
+            --species           {params.species} \
+            --cluster-id        {params.cluster_id} \
+            --threads           {params.threads} \
+            --min-cov           {params.min_cov} \
+            --max-multi         {params.max_multi} \
+            --control-condition {params.control_cond} \
+            --local-mod \
+            -n                  {params.name} \
+            --out-dir           "{params.mimseq_dir}" \
+            "$SAMPLESHEET" \
+            >> {log} 2>&1
+
+        # ── Move outputs to Snakemake-expected paths ─────────────────────
+        echo "[$(date)] Copying count files..." >> {log}
+        mkdir -p "$(dirname {output.iso_counts})"
+        cp "{params.mimseq_dir}/counts/Isodecoder_counts.txt" "{output.iso_counts}"
+        cp "{params.mimseq_dir}/counts/Isoacceptor_counts.txt" "{output.isoa_counts}"
+
+        # Move align/ to {params.outdir}/align/ for link_mimtrnaseq_bam
+        echo "[$(date)] Moving align directory..." >> {log}
+        rm -rf "{params.outdir}/align"
+        mv "{params.mimseq_dir}/align" "{params.outdir}/align"
+
+        # ── Verify and create sentinel files ─────────────────────────────
+        N_BAMS=$(find "{params.outdir}/align/" -name "*.bam" | wc -l)
         echo "[$(date)] Found $N_BAMS BAM files in {params.outdir}/align/" >> {log}
 
         touch {output.align_done}
@@ -124,14 +163,16 @@ rule mimtrnaseq:
 # ---------------------------------------------------------------------------
 # Helper rule: locate the per-sample BAM produced by mim-tRNAseq.
 # mim-tRNAseq names BAMs by the input FASTQ basename (stripping _val_1.fq.gz).
-# We symlink/copy to our consistent per-sample naming scheme so downstream
+# We copy to our consistent per-sample naming scheme so downstream
 # rules can use {sample}.bam paths without worrying about the mim naming logic.
 # ---------------------------------------------------------------------------
 rule link_mimtrnaseq_bam:
     """
-    Create a consistently-named symlink for each per-sample mim-tRNAseq BAM.
+    Create a consistently-named copy of each per-sample mim-tRNAseq BAM.
     mim-tRNAseq names BAMs by stripped FASTQ basename; we standardise to
     {sample}.bam for all downstream rules.
+
+    Uses the main environment (samtools only; mimseq not required here).
     """
     input:
         align_done = lambda wildcards: (
@@ -151,6 +192,8 @@ rule link_mimtrnaseq_bam:
         outdir = f"{SCRATCH}/pass1_mimtrnaseq/{{sample}}",
     log:
         f"{SCRATCH}/logs/03_link_bam/{{sample}}.log",
+    conda:
+        "../../envs/environment.yaml"
     shell:
         r"""
         set -euo pipefail

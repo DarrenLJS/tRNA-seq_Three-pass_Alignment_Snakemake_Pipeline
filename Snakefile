@@ -8,7 +8,7 @@
 # ---------------
 #   00  Reference preparation  (pre-tRNA FASTA, Bowtie2 index, anticodon map,
 #                                TRAX database, miRBase filtering)
-#   01  Adapter trimming        (Trim Galore; on-the-fly A549 lane merging)
+#   01  Adapter trimming        (Trim Galore; A549 lanes pre-merged to scratch/tmp)
 #   02  Post-trim QC            (FastQC + MultiQC per cell line)
 #   03  Pass 1 alignment        (mim-tRNAseq → mature tRNA, per cell line)
 #   04  Pass 1 filters          (pysam: CCA filter + anticodon concordance)
@@ -17,22 +17,34 @@
 #   07  tRF quantification      (TRAX; Pass 1 + Pass 2 BAMs)
 #   08  DESeq2 input prep       (count matrices + coldata per cell line)
 #
+# Conda environments
+# ------------------
+#   envs/environment.yaml  — main env (all tools except mimseq and tRAX)
+#   envs/mimseq.yaml       — mim-tRNAseq (python=3.7, isolated)
+#   envs/trax_env.yaml     — tRAX / TRAX (maketraxdb.py, processsamples.py)
+#
+#   Each rule declares its own conda: directive; Snakemake activates the
+#   correct environment per rule when --use-conda is passed.
+#
 # Usage
 # -----
 #   # Dry run (check DAG, no execution)
-#   snakemake -n --cores 128
+#   snakemake -n --use-conda --cores 128
 #
-#   # Full run — activate the single conda env first, then:
-#   conda activate snakemake_pipeline
-#   snakemake --cores 128 --rerun-incomplete \
+#   # Full run
+#   snakemake --use-conda --cores 128 --rerun-incomplete \
 #             --keep-going --latency-wait 60
 #
 #   # Run in background (recommended on SSH server)
-#   conda activate snakemake_pipeline
-#   nohup snakemake --cores 128 --rerun-incomplete \
+#   nohup snakemake --use-conda --cores 128 --rerun-incomplete \
 #         --keep-going --latency-wait 60 \
 #         > logs/snakemake_main.log 2>&1 &
 #   echo "Snakemake PID: $!"
+#
+#   # NOTE: Do NOT manually conda activate an environment before running.
+#   #       Snakemake handles per-rule activation via --use-conda.
+#   #       The only requirement is that conda itself is on PATH
+#   #       (e.g. via Miniforge: conda activate base).
 #
 # =============================================================================
 
@@ -77,19 +89,13 @@ def is_gzipped(sample):
     return first.endswith(".gz")
 
 
-def cat_cmd(sample, read):
+def trim_n_lanes(wildcards):
     """
-    Build a bash process-substitution expression that streams all lane files
-    for this sample/read as a single uncompressed FASTQ stream.
-    Used by Trim Galore to avoid pre-writing merged lane files to disk.
-
-    A549 (.fastq, uncompressed):   <(cat  lane1.fastq lane2.fastq)
-    THP1 (.fq.gz, gzip):           <(zcat file.fq.gz)
+    Return the number of input lanes for a sample.
+    THP1 = 1 (single .fq.gz); A549 = 2 (two uncompressed .fastq lanes).
+    Used by the trim_galore rule to decide whether to pre-merge lanes.
     """
-    files   = r_files(sample, read)
-    decat   = "zcat" if is_gzipped(sample) else "cat"
-    joined  = " ".join(files)
-    return f"<({decat} {joined})"
+    return len(r_files(wildcards.sample, "R1"))
 
 
 # ---------------------------------------------------------------------------

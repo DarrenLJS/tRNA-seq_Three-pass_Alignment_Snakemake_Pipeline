@@ -1,0 +1,8 @@
+name: mimseq
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.7
+  - mimseq=1.3.9     # pin to latest version
+  - vsearch          # usearch drop-in replacement for tRNA clustering step

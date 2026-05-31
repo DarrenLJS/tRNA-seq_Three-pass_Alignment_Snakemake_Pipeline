@@ -17,8 +17,9 @@
 # contains the miRNA seed sequence). R2 is not used here.
 # =============================================================================
 
-REF = config["references"]
 MD2 = config["mirdeep2"]
+# NOTE: REF is defined in 00_reference_prep.smk (same included namespace).
+#       Accessing config["references"] directly to avoid redefinition.
 
 
 rule mirdeep2_pass3:
@@ -37,8 +38,8 @@ rule mirdeep2_pass3:
     """
     input:
         r1           = f"{SCRATCH}/pass2_pretRNA/{{sample}}/{{sample}}.pretRNA_unmapped_R1.fq.gz",
-        mature_hsa   = REF["mirbase_mature_hsa"],
-        hairpin_hsa  = REF["mirbase_hairpin_hsa"],
+        mature_hsa   = config["references"]["mirbase_mature_hsa"],
+        hairpin_hsa  = config["references"]["mirbase_hairpin_hsa"],
     output:
         counts     = f"{SCRATCH}/pass3_mirna/{{sample}}/{{sample}}_miRNA_counts.txt",
         collapsed  = f"{SCRATCH}/pass3_mirna/{{sample}}/{{sample}}_collapsed.fa",
@@ -46,12 +47,14 @@ rule mirdeep2_pass3:
     params:
         outdir          = f"{SCRATCH}/pass3_mirna/{{sample}}",
         threads         = MD2["threads"],
-        genome_bt1_idx  = REF["bowtie1_genome_index"],
+        genome_bt1_idx  = config["references"]["bowtie1_genome_index"],
         sample          = "{sample}",
     log:
         f"{SCRATCH}/logs/06_pass3_mirna/{{sample}}.log",
     benchmark:
         f"{SCRATCH}/benchmarks/06_pass3_mirna/{{sample}}.tsv",
+    conda:
+        "../../envs/environment.yaml"
     shell:
         r"""
         set -euo pipefail

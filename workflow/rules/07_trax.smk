@@ -23,7 +23,8 @@
 # =============================================================================
 
 TRAX_CFG = config["trax"]
-REF = config["references"]
+# NOTE: REF is defined in 00_reference_prep.smk (same included namespace).
+#       Accessing config["references"] directly to avoid redefinition.
 
 
 rule trax_quantify:
@@ -36,9 +37,9 @@ rule trax_quantify:
       2. Write TRAX sample file (TSV: sample_name <TAB> bam_path)
       3. Run processsamples.py
 
-    TODO: Verify TRAX version and exact CLI. Common variants:
-        processsamples.py (older tRAX)
-        trax processsamples (newer CLI wrapper)
+    tRAX scripts are called via:  python {params.trax_dir}/processsamples.py
+    because tRAX is a GitHub repo, not a conda/pip package.  Its dependencies
+    (samtools, pysam, bowtie2 …) are provided by trax_env.yaml.
     """
     input:
         pass1_bams = lambda wildcards: expand(
@@ -49,7 +50,7 @@ rule trax_quantify:
             f"{SCRATCH}/pass2_pretRNA/{{sample}}/{{sample}}.pretRNA.bam",
             sample=samples_for(wildcards.cell_line)
         ),
-        trax_db    = REF["trax_ref_dir"],
+        trax_db    = config["references"]["trax_ref_dir"],
     output:
         trf_counts   = f"{SCRATCH}/trax/{{cell_line}}/counts/tRF_counts.txt",
         tirna_counts = f"{SCRATCH}/trax/{{cell_line}}/counts/tiRNA_counts.txt",
@@ -59,12 +60,16 @@ rule trax_quantify:
         min_unique  = TRAX_CFG["min_unique_cov"],
         threads     = TRAX_CFG["threads"],
         scratch     = SCRATCH,
+        trax_dir    = config["trax"]["script_dir"],
         # Pass sample list as a single space-separated string for bash to iterate
         samples     = lambda wildcards: " ".join(samples_for(wildcards.cell_line)),
     log:
         f"{SCRATCH}/logs/07_trax/{{cell_line}}.log",
     benchmark:
         f"{SCRATCH}/benchmarks/07_trax/{{cell_line}}.tsv",
+    threads: lambda wildcards: TRAX_CFG["threads"]
+    conda:
+        "../../envs/trax_env.yaml"
     shell:
         r"""
         set -euo pipefail
@@ -95,7 +100,7 @@ rule trax_quantify:
 
         # Step 2 — Run TRAX
         echo "[$(date)] Running TRAX processsamples.py..."
-        processsamples.py \
+        python {params.trax_dir}/processsamples.py \
             --samplefile  {output.sample_file} \
             --database    {input.trax_db} \
             --outputdir   {params.outdir} \

@@ -16,7 +16,8 @@
 # =============================================================================
 
 BT2 = config["bowtie2"]
-REF = config["references"]
+# NOTE: REF is defined in 00_reference_prep.smk (same included namespace).
+#       Accessing config["references"] directly to avoid redefinition.
 
 
 rule bowtie2_pretRNA:
@@ -29,7 +30,7 @@ rule bowtie2_pretRNA:
     input:
         r1          = f"{SCRATCH}/pass1_filters/{{sample}}/{{sample}}.unmapped_R1.fq.gz",
         r2          = f"{SCRATCH}/pass1_filters/{{sample}}/{{sample}}.unmapped_R2.fq.gz",
-        index_done  = REF["pretRNA_index"] + ".1.bt2",
+        index_done  = config["references"]["pretRNA_index"] + ".1.bt2",
     output:
         bam          = f"{SCRATCH}/pass2_pretRNA/{{sample}}/{{sample}}.pretRNA.bam",
         bai          = f"{SCRATCH}/pass2_pretRNA/{{sample}}/{{sample}}.pretRNA.bam.bai",
@@ -37,8 +38,8 @@ rule bowtie2_pretRNA:
         unmapped_r2  = f"{SCRATCH}/pass2_pretRNA/{{sample}}/{{sample}}.pretRNA_unmapped_R2.fq.gz",
         align_stats  = f"{SCRATCH}/pass2_pretRNA/{{sample}}/{{sample}}.bowtie2_stats.txt",
     params:
-        outdir        = f"{SCRATCH}/pass2_pretRNA/{{sample}}",
-        index_prefix  = REF["pretRNA_index"],
+        outdir        = lambda wildcards: f"{SCRATCH}/pass2_pretRNA/{wildcards.sample}",
+        index_prefix  = config["references"]["pretRNA_index"],
         preset        = BT2["preset"],
         max_align     = BT2["max_align"],
         threads       = BT2["threads"],
@@ -49,6 +50,8 @@ rule bowtie2_pretRNA:
     threads: lambda wildcards: BT2["threads"]
     resources:
         mem_mb = config["resources"]["bowtie2_mem_mb"],
+    conda:
+        "../../envs/environment.yaml"
     shell:
         r"""
         set -euo pipefail
@@ -70,9 +73,10 @@ rule bowtie2_pretRNA:
             2> {output.align_stats} \
         | samtools sort -@ 4 -o {output.bam} -
 
-        # Rename --un-conc-gz outputs to match expected naming convention
-        # Bowtie2 --un-conc-gz with % wildcard outputs _R1.fq.gz and _R2.fq.gz
-        # (already matching our expected output names above)
+        # Bowtie2 --un-conc-gz replaces % with 1 and 2, producing:
+        #   {wildcards.sample}.pretRNA_unmapped_R1.fq.gz
+        #   {wildcards.sample}.pretRNA_unmapped_R2.fq.gz
+        # These match the declared output names above — no rename needed.
 
         samtools index {output.bam}
 

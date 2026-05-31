@@ -16,6 +16,11 @@
 #   3. miRBase release 22.1
 #      wget https://www.mirbase.org/download/mature.fa
 #      wget https://www.mirbase.org/download/hairpin.fa
+#
+# Conda environments used
+# -----------------------
+#   Rules 00a–00e  →  ../../envs/environment.yaml  (bedtools, bowtie2, samtools)
+#   Rule  00f      →  ../../envs/trax_env.yaml      (maketraxdb.py / tRAX)
 # =============================================================================
 
 REF = config["references"]
@@ -43,17 +48,40 @@ rule build_pretRNA_fasta:
         f"{SCRATCH}/logs/00_build_pretRNA_fasta.log",
     benchmark:
         f"{SCRATCH}/benchmarks/00_build_pretRNA_fasta.tsv",
+    conda:
+        "../../envs/environment.yaml"
     shell:
         r"""
         set -euo pipefail
         exec &> {log}
 
+        # NOTE: GRCh38.primary_assembly.genome.fa is from Ensembl and uses
+        # chromosome names WITHOUT a chr prefix (e.g. "1", "2").
+        # hg38-tRNAs_nochr.bed from GtRNAdb also lacks the chr prefix, so the
+        # primary chromosomes already match.  However, GtRNAdb scaffold names
+        # (e.g. "1_KI270713v1_random") differ from Ensembl's naming
+        # (e.g. "KI270713.1"), causing bedtools slop to error.
+        # We pre-filter the BED to only rows whose chromosome appears in the
+        # FAI.  These scaffold tRNAs are a tiny minority and dropping them is
+        # standard practice for this reference combination.
+        REFDIR=$(dirname {output.flanked_bed})
+        mkdir -p "$REFDIR"
+
+        echo "[$(date)] Filtering BED to chromosomes present in FAI..."
+        awk 'NR==FNR {{chroms[$1]=1; next}} ($1 in chroms)' \
+            {input.fai} {input.bed} \
+            > "$REFDIR/tRNAs_fai_filtered.bed"
+        N_IN=$(wc -l < {input.bed})
+        N_OUT=$(wc -l < "$REFDIR/tRNAs_fai_filtered.bed")
+        echo "[$(date)] Kept $N_OUT of $N_IN BED entries after chromosome filter."
+
         echo "[$(date)] Slopping tRNA BED ±50 nt..."
         bedtools slop \
-            -i   {input.bed} \
+            -i   "$REFDIR/tRNAs_fai_filtered.bed" \
             -g   {input.fai} \
             -b   50 \
             > {output.flanked_bed}
+        rm -f "$REFDIR/tRNAs_fai_filtered.bed"
 
         echo "[$(date)] Extracting pre-tRNA FASTA (intron-retaining)..."
         bedtools getfasta \
@@ -89,10 +117,18 @@ rule build_pretRNA_spliced_fasta:
         f"{SCRATCH}/logs/00_build_pretRNA_spliced_fasta.log",
     benchmark:
         f"{SCRATCH}/benchmarks/00_build_pretRNA_spliced_fasta.tsv",
+    conda:
+        "../../envs/environment.yaml"
     shell:
         r"""
         set -euo pipefail
         exec &> {log}
+
+        # NOTE: flanked_bed (from rule 00a) and hg38-tRNA-introns.bed both use
+        # Ensembl-style chromosome names without a chr prefix — they already
+        # match, so no sed conversion is needed here either.
+        REFDIR=$(dirname {output.spliced_bed})
+        mkdir -p "$REFDIR"
 
         echo "[$(date)] Subtracting introns from flanked pre-tRNA loci..."
         bedtools subtract \
@@ -114,6 +150,10 @@ rule build_pretRNA_spliced_fasta:
 
 # ---------------------------------------------------------------------------
 # 00c: Build combined (intron-retaining + spliced) Bowtie2 index
+#
+# FIX: Added `threads:` directive so Snakemake correctly reserves the cores
+#      declared in params.threads from the scheduler. Previously, bowtie2-build
+#      would claim cores without Snakemake's knowledge, causing over-subscription.
 # ---------------------------------------------------------------------------
 rule build_bowtie2_pretRNA_index:
     """
@@ -133,6 +173,9 @@ rule build_bowtie2_pretRNA_index:
         f"{SCRATCH}/logs/00_build_bowtie2_pretRNA_index.log",
     benchmark:
         f"{SCRATCH}/benchmarks/00_build_bowtie2_pretRNA_index.tsv",
+    threads: lambda wildcards: config["bowtie2"]["threads"]
+    conda:
+        "../../envs/environment.yaml"
     shell:
         r"""
         set -euo pipefail
@@ -177,51 +220,10 @@ rule build_anticodon_map:
         tsv = REF["anticodon_map"],
     log:
         f"{SCRATCH}/logs/00_build_anticodon_map.log",
-    run:
-        import re, logging
-        logging.basicConfig(filename=log[0], level=logging.INFO,
-                            format="%(asctime)s %(message)s")
-        logger = logging.getLogger()
-
-        entries = {}
-        failed  = []
-
-        with open(input.fa) as fh:
-            for line in fh:
-                if not line.startswith(">"):
-                    continue
-                header = line.strip().lstrip(">")
-                locus  = header.split()[0]   # first whitespace-delimited field
-
-                # ── New GtRNAdb 2.0 format: tRNA-Tyr-GTA-1-1 ──────────────
-                # Split on dash: ['tRNA', 'Tyr', 'GTA', '1', '1']
-                # Anticodon is index 2, always 3 characters
-                parts = locus.split("-")
-                if (len(parts) >= 3
-                        and parts[0] == "tRNA"
-                        and len(parts[2]) == 3
-                        and re.match(r'^[ACGTU]{3}$', parts[2])):
-                    entries[locus] = parts[2].replace("U", "T")
-                    continue
-
-                # ── Old GtRNAdb format fallback: (AGC) at end of header ────
-                m = re.search(r'\(([ACGT]{3})\)\s*$', header)
-                if m:
-                    entries[locus] = m.group(1)
-                    continue
-
-                # ── Could not parse ────────────────────────────────────────
-                failed.append(locus)
-                logger.warning(f"Could not parse anticodon from: {header}")
-
-        with open(output.tsv, "w") as out:
-            out.write("locus\tanticodon\n")
-            for locus, ac in sorted(entries.items()):
-                out.write(f"{locus}\t{ac}\n")
-
-        logger.info(f"Written {len(entries)} locus→anticodon entries to {output.tsv}")
-        if failed:
-            logger.warning(f"Failed to parse {len(failed)} entries: {failed[:5]}")
+    conda:
+        "../../envs/environment.yaml"
+    script:
+        "../scripts/build_anticodon_map.py"
 
 
 # ---------------------------------------------------------------------------
@@ -241,53 +243,125 @@ rule filter_mirbase_human:
         hairpin_hsa = REF["mirbase_hairpin_hsa"],
     log:
         f"{SCRATCH}/logs/00_filter_mirbase_human.log",
-    run:
-        import logging
-        logging.basicConfig(filename=log[0], level=logging.INFO,
-                            format="%(asctime)s %(message)s")
+    conda:
+        "../../envs/environment.yaml"
+    script:
+        "../scripts/filter_mirbase_human.py"
 
-        def filter_fasta(src, dst, prefix="hsa-"):
-            kept = 0
-            with open(src) as fin, open(dst, "w") as fout:
-                write = False
-                for line in fin:
-                    if line.startswith(">"):
-                        write = line[1:].startswith(prefix)
-                        if write:
-                            kept += 1
-                    if write:
-                        fout.write(line)
-            return kept
 
-        n_mat = filter_fasta(input.mature,  output.mature_hsa)
-        n_hp  = filter_fasta(input.hairpin, output.hairpin_hsa)
-        logging.info(f"Kept {n_mat} mature hsa miRNAs, {n_hp} hairpin hsa miRNAs.")
+# ---------------------------------------------------------------------------
+# 00f-pre: Convert detailed tRNAscan-SE output to standard 9-column format
+#
+# The GtRNAdb tarball ships only the detailed output (15+ columns including
+# HMM Score, 2' Structure Score, Isotype CM, etc.).  tRAX maketrnadb.py
+# expects the classic 9-column tRNAscan-SE format:
+#   Seq  tRNA#  Begin  End  Type  Anti  IntronBegin  IntronEnd  Score
+# The extra columns make tRAX's parser find zero tRNA entries and abort
+# with "No trna sequences".
+#
+# Fix: strip columns 10+ with awk, skipping the 3-line header block.
+# ---------------------------------------------------------------------------
+rule convert_trnascan_out:
+    """
+    Derive a standard 9-column tRNAscan-SE .out file from the detailed
+    GtRNAdb output so that tRAX maketrnadb.py can parse it correctly.
+
+    Two transformations applied:
+      1. Strip columns 10+ (HMM Score, Isotype, etc.) — tRAX parser expects
+         exactly 9 columns; extra columns cause it to return "No trna sequences".
+      2. Strip the 'chr' prefix from column 1 — GtRNAdb uses UCSC-style names
+         (chr1, chr2 ...) but the Ensembl primary assembly FASTA uses bare
+         chromosome names (1, 2 ...).  tRAX fetches sequences from the genome
+         by the name in col 1; a mismatch silently skips every entry.
+         This is the same reason hg38-tRNAs_nochr.bed exists in the config.
+         NOTE: convert_namemap_nochr applies the same strip to the name map so
+         the tRNAscan IDs tRAX constructs (e.g. 1.trna1) continue to match.
+    """
+    input:
+        detailed = REF["gtrndb_detailed_out"],
+    output:
+        standard = REF["gtrndb_standard_out"],
+    log:
+        f"{SCRATCH}/logs/00_convert_trnascan_out.log",
+    shell:
+        r"""
+        set -euo pipefail
+        exec &> {log}
+
+        echo "[$(date)] Converting detailed tRNAscan output to standard 9-column format (chr-stripped)..."
+        awk 'NR<=3{{next}} {{gsub(/^chr/,"",$1); print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7"\t"$8"\t"$9}}' \
+            {input.detailed} > {output.standard}
+
+        N=$(wc -l < {output.standard})
+        echo "[$(date)] Done — $N tRNA entries written to {output.standard}."
+        """
+
+
+# ---------------------------------------------------------------------------
+# 00f-pre2: Strip chr prefix from the GtRNAdb name map
+#
+# tRAX constructs tRNAscan IDs by joining the chromosome name from the .out
+# file with the tRNA number (e.g. col1="1", col2="3" → "1.trna3").
+# The raw GtRNAdb name map uses UCSC-style chr-prefixed IDs on the left
+# (e.g. "chr1.trna3 → tRNA-Val-CAC-13-1").  After convert_trnascan_out strips
+# "chr" from col 1 of the .out file, tRAX constructs "1.trna3" — which must
+# match the left column of the name map.  This rule keeps both files in sync.
+# ---------------------------------------------------------------------------
+rule convert_namemap_nochr:
+    """
+    Strip the 'chr' prefix from tRNAscan-SE IDs in the GtRNAdb name map
+    (left column) so they match the chr-stripped .out file produced by
+    convert_trnascan_out.  The header line is preserved unchanged.
+    """
+    input:
+        namemap = REF["gtrndb_name_map"],
+    output:
+        namemap_nochr = REF["gtrndb_name_map_nochr"],
+    log:
+        f"{SCRATCH}/logs/00_convert_namemap_nochr.log",
+    shell:
+        r"""
+        set -euo pipefail
+        exec &> {log}
+
+        echo "[$(date)] Stripping chr prefix from name map left column..."
+        awk 'NR==1{{print; next}} {{sub(/^chr/,"",$1); print $1"\t"$2}}' \
+            {input.namemap} > {output.namemap_nochr}
+
+        N=$(awk 'NR>1' {output.namemap_nochr} | wc -l)
+        echo "[$(date)] Done — $N entries written to {output.namemap_nochr}."
+        """
 
 
 # ---------------------------------------------------------------------------
 # 00f: Build TRAX database from GtRNAdb files
 #      TRAX (tRAX) requires a pre-built database for tRF quantification.
+#      Uses trax_env.yaml — tRAX is not in the main environment.
 # ---------------------------------------------------------------------------
 rule build_trax_db:
     """
     Construct the TRAX database from GtRNAdb files.
-    Requires: trax (tRAX) installed in the trax conda env.
 
-    TODO: Verify the exact trax database-build command for your tRAX version.
-          Typical usage: maketraxdb.py --trnaout hg38-tRNAs-detailed.out
-                                       --genome  GRCh38.fa
-                                       --name    hsapi38
+    tRAX is not a conda/pip package — it is a GitHub repository of Python
+    scripts.  The trax_env.yaml conda environment provides all dependencies
+    (samtools, bedtools, bowtie2, pysam …) but the scripts themselves live
+    in the cloned repo at config["trax"]["script_dir"].
+    All tRAX scripts are therefore invoked as:
+        python {params.trax_dir}/maketrnadb.py ...
     """
     input:
-        tRNA_out = REF["gtrndb_detailed_out"],
+        tRNA_out = REF["gtrndb_standard_out"],      # 9-column, chr-stripped (from convert_trnascan_out)
         genome   = REF["genome_fasta"],
+        namemap  = REF["gtrndb_name_map_nochr"],    # chr-stripped IDs (from convert_namemap_nochr)
     output:
         db_flag  = directory(REF["trax_ref_dir"]),
     params:
-        db_name  = "hsapi38",
         outdir   = REF["trax_ref_dir"],
+        trax_dir = config["trax"]["script_dir"],
     log:
         f"{SCRATCH}/logs/00_build_trax_db.log",
+    conda:
+        "../../envs/trax_env.yaml"
     shell:
         r"""
         set -euo pipefail
@@ -295,11 +369,11 @@ rule build_trax_db:
         mkdir -p {params.outdir}
 
         echo "[$(date)] Building TRAX database..."
-        maketraxdb.py \
-            --trnaout {input.tRNA_out} \
-            --genome  {input.genome} \
-            --name    {params.db_name} \
-            --out     {params.outdir}
+        python {params.trax_dir}/maketrnadb.py \
+            --trnascanfile {input.tRNA_out} \
+            --genomefile   {input.genome} \
+            --namemapfile  {input.namemap} \
+            --databasename {params.outdir}/hsapi38
 
         echo "[$(date)] TRAX database built at {params.outdir}."
         """

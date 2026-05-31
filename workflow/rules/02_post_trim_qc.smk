@@ -21,6 +21,8 @@ rule fastqc_post_trim:
     benchmark:
         f"{SCRATCH}/benchmarks/02_fastqc_post_trim/{{sample}}_{{read}}.tsv",
     threads: 2
+    conda:
+        "../../envs/environment.yaml"
     shell:
         r"""
         set -euo pipefail
@@ -68,6 +70,8 @@ rule multiqc_post_trim:
         fname  = "{cell_line}_post_trim_multiqc",
     log:
         f"{SCRATCH}/logs/02_multiqc_post_trim/{{cell_line}}.log",
+    conda:
+        "../../envs/environment.yaml"
     shell:
         r"""
         set -euo pipefail
