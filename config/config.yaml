@@ -132,3 +132,7 @@ resources:
   trim_mem_mb:     16000
   mim_mem_mb:      64000    # mim-tRNAseq is memory-intensive (GSNAP index)
   bowtie2_mem_mb:  32000
+  cca_filter_mem_mb:       4000   # r2_dict (~1-2 GB) + BAM buffers; no unmapped lists (streamed)
+  mirdeep2_mem_mb:         8000   # mapper.pl + quantifier.pl + Bowtie1 index
+  trax_mem_mb:            16000   # TRAX processsamples.py across all cell-line BAMs
+  read_assignment_mem_mb:  2000   # pandas summary script; small TSV parsing only

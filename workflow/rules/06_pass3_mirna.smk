@@ -53,6 +53,9 @@ rule mirdeep2_pass3:
         f"{SCRATCH}/logs/06_pass3_mirna/{{sample}}.log",
     benchmark:
         f"{SCRATCH}/benchmarks/06_pass3_mirna/{{sample}}.tsv",
+    threads: lambda wildcards: MD2["threads"]
+    resources:
+        mem_mb = config["resources"]["mirdeep2_mem_mb"],
     conda:
         "../../envs/environment.yaml"
     shell:

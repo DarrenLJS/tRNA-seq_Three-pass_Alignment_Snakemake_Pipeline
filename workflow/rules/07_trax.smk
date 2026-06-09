@@ -68,6 +68,8 @@ rule trax_quantify:
     benchmark:
         f"{SCRATCH}/benchmarks/07_trax/{{cell_line}}.tsv",
     threads: lambda wildcards: TRAX_CFG["threads"]
+    resources:
+        mem_mb = config["resources"]["trax_mem_mb"],
     conda:
         "../../envs/trax_env.yaml"
     shell:

@@ -20,17 +20,27 @@
 #
 # The CCA+anticodon pass rate is the PRIMARY internal QC metric
 # (target: ≥70% of Pass 1-aligned reads; proposal Section 4).
+#
+# NOTE: mim-tRNAseq aligns R1 only and produces single-end (unpaired) BAMs.
+# trimmed_r2 is therefore passed as an explicit input so the filter script
+# can (a) look up R2 sequences for the CCA check on mapped reads, and
+# (b) recover R2 mates for unmapped reads sent to Pass 2 (bowtie2_pretRNA).
 # =============================================================================
 
 rule cca_anticodon_filter:
     """
     Apply CCA and anticodon concordance filters to a mim-tRNAseq BAM.
     Calls workflow/scripts/cca_anticodon_filter.py.
+
+    mim-tRNAseq produces single-end BAMs (R1 only). trimmed_r2 is supplied
+    so the script can perform the CCA check and re-pair unmapped reads for
+    the pre-tRNA alignment pass.
     """
     input:
-        bam          = f"{SCRATCH}/pass1_mimtrnaseq/{{sample}}/{{sample}}.bam",
-        bai          = f"{SCRATCH}/pass1_mimtrnaseq/{{sample}}/{{sample}}.bam.bai",
+        bam           = f"{SCRATCH}/pass1_mimtrnaseq/{{sample}}/{{sample}}.bam",
+        bai           = f"{SCRATCH}/pass1_mimtrnaseq/{{sample}}/{{sample}}.bam.bai",
         anticodon_map = config["references"]["anticodon_map"],
+        trimmed_r2    = f"{SCRATCH}/trimmed/{{sample}}/{{sample}}_val_2.fq.gz",  # FIX: needed because mimtRNAseq BAMs are single-end
     output:
         filtered_bam = f"{SCRATCH}/pass1_filters/{{sample}}/{{sample}}.functional.bam",
         filtered_bai = f"{SCRATCH}/pass1_filters/{{sample}}/{{sample}}.functional.bam.bai",
@@ -44,6 +54,9 @@ rule cca_anticodon_filter:
         f"{SCRATCH}/logs/04_pass1_filters/{{sample}}.log",
     benchmark:
         f"{SCRATCH}/benchmarks/04_pass1_filters/{{sample}}.tsv",
+    threads: 1
+    resources:
+        mem_mb = config["resources"]["cca_filter_mem_mb"],
     conda:
         "../../envs/environment.yaml"
     script:

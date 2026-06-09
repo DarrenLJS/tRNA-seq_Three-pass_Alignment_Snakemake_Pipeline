@@ -80,5 +80,7 @@ rule build_read_assignment_summary:
         f"{SCRATCH}/logs/08_read_assignment/{{cell_line}}.log",
     conda:
         "../../envs/environment.yaml"
+    resources:
+        mem_mb = config["resources"]["read_assignment_mem_mb"],
     script:
         "../scripts/build_read_assignment_summary.py"

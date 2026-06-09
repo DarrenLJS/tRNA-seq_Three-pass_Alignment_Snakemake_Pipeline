@@ -15,9 +15,18 @@
 # Input: all trimmed R1/R2 FASTQ pairs for the cell line
 # Key outputs:
 #   counts/Isodecoder_counts.txt   → DESeq2 isodecoder analysis
-#   counts/Isoacceptor_counts.txt  → collapsed isoacceptor analysis
+#   counts/Isoacceptor_counts.txt  → collapsed isoacceptor analysis (anticodon level)
 #   mismatch/                      → wobble position 34 modification inference
 #   align/{sample}.bam             → per-sample BAMs for downstream filters
+#
+# NOTE on mimseq output filenames (verified from actual run):
+#   mimseq writes  counts/Isodecoder_counts_raw.txt   (NOT Isodecoder_counts.txt)
+#                  counts/Anticodon_counts_raw.txt     (NOT Isoacceptor_counts.txt)
+#   Also produced: counts/{cyto,mito}_Isodecoder_counts_DESEqNormalized.csv
+#                  counts/{cyto,mito}_Anticodon_counts_DESEqNormalized.csv
+#   We copy the raw files to the Snakemake-contracted names below.
+#   The Anticodon → Isoacceptor renaming is intentional: anticodon groupings
+#   are the isoacceptor level of analysis used throughout this pipeline.
 #
 # Conda environments
 # ------------------
@@ -56,8 +65,9 @@ rule mimtrnaseq:
     so we point mimseq at a fresh _run/ subdirectory and then copy the
     required outputs up to the Snakemake-expected paths afterwards.
 
-    Per-sample BAMs land at {outdir}/align/{sample}_val_1.bam, which is
-    where link_mimtrnaseq_bam expects to find them.
+    Per-sample BAMs land at {outdir}/align/{sample}_val_1.fq.gz.unpaired_uniq.bam
+    (mimseq preserves the full input filename and appends the GSNAP category suffix),
+    which is where link_mimtrnaseq_bam expects to find them.
     """
     input:
         r1_files = lambda wildcards: mim_input_r1(wildcards.cell_line),
@@ -140,10 +150,15 @@ rule mimtrnaseq:
             >> {log} 2>&1
 
         # ── Move outputs to Snakemake-expected paths ─────────────────────
+        # mimseq actual output names (verified from run):
+        #   Isodecoder_counts_raw.txt  → Isodecoder_counts.txt  (isodecoder level)
+        #   Anticodon_counts_raw.txt   → Isoacceptor_counts.txt (isoacceptor/anticodon level)
+        # The Anticodon→Isoacceptor rename is intentional: anticodon groupings
+        # represent the isoacceptor level used throughout this pipeline.
         echo "[$(date)] Copying count files..." >> {log}
         mkdir -p "$(dirname {output.iso_counts})"
-        cp "{params.mimseq_dir}/counts/Isodecoder_counts.txt" "{output.iso_counts}"
-        cp "{params.mimseq_dir}/counts/Isoacceptor_counts.txt" "{output.isoa_counts}"
+        cp "{params.mimseq_dir}/counts/Isodecoder_counts_raw.txt" "{output.iso_counts}"
+        cp "{params.mimseq_dir}/counts/Anticodon_counts_raw.txt"  "{output.isoa_counts}"
 
         # Move align/ to {params.outdir}/align/ for link_mimtrnaseq_bam
         echo "[$(date)] Moving align directory..." >> {log}
@@ -162,15 +177,19 @@ rule mimtrnaseq:
 
 # ---------------------------------------------------------------------------
 # Helper rule: locate the per-sample BAM produced by mim-tRNAseq.
-# mim-tRNAseq names BAMs by the input FASTQ basename (stripping _val_1.fq.gz).
-# We copy to our consistent per-sample naming scheme so downstream
+# mim-tRNAseq preserves the full input FASTQ filename and appends
+# '.unpaired_uniq.bam' (GSNAP uniquely-mapping output category), e.g.:
+#   A549_c2_1_val_1.fq.gz.unpaired_uniq.bam
+# No unpaired_mult BAMs are present — mimseq handles multimapper filtering
+# internally. We copy to our consistent per-sample naming scheme so downstream
 # rules can use {sample}.bam paths without worrying about the mim naming logic.
 # ---------------------------------------------------------------------------
 rule link_mimtrnaseq_bam:
     """
     Create a consistently-named copy of each per-sample mim-tRNAseq BAM.
-    mim-tRNAseq names BAMs by stripped FASTQ basename; we standardise to
-    {sample}.bam for all downstream rules.
+    mim-tRNAseq preserves the full input FASTQ filename and appends
+    '.unpaired_uniq.bam' (e.g. A549_c2_1_val_1.fq.gz.unpaired_uniq.bam).
+    We copy to {sample}.bam for all downstream rules.
 
     Uses the main environment (samtools only; mimseq not required here).
     """
@@ -183,11 +202,15 @@ rule link_mimtrnaseq_bam:
         bam   = f"{SCRATCH}/pass1_mimtrnaseq/{{sample}}/{{sample}}.bam",
         bai   = f"{SCRATCH}/pass1_mimtrnaseq/{{sample}}/{{sample}}.bam.bai",
     params:
-        # mim-tRNAseq strips '_val_1.fq.gz' from R1 filename to name BAM
+        # mim-tRNAseq preserves the full input FASTQ filename and appends
+        # '.unpaired_uniq.bam' — confirmed from actual run output:
+        #   A549_c2_1_val_1.fq.gz.unpaired_uniq.bam
+        # Only unpaired_uniq BAMs are present; no unpaired_mult BAMs exist,
+        # meaning mimseq handles multimapper filtering internally.
         src_bam = lambda wildcards: (
             f"{SCRATCH}/pass1_mimtrnaseq/"
             f"{manifest.loc[wildcards.sample,'cell_line']}/"
-            f"align/{wildcards.sample}_val_1.bam"
+            f"align/{wildcards.sample}_val_1.fq.gz.unpaired_uniq.bam"
         ),
         outdir = f"{SCRATCH}/pass1_mimtrnaseq/{{sample}}",
     log:
