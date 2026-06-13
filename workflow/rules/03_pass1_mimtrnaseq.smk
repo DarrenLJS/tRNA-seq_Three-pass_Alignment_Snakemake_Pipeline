@@ -94,7 +94,9 @@ rule mimtrnaseq:
         f"{SCRATCH}/benchmarks/03_mimtrnaseq/{{cell_line}}.tsv",
     threads: lambda wildcards: MIM["threads"]
     resources:
-        mem_mb = config["resources"]["mim_mem_mb"],
+        sge_pe    = "sharedmem",
+        runtime   = 480,
+        sge_extra = "-V -l h_vmem=8000M"
     conda:
         "../../envs/mimseq.yaml"
     shell:
@@ -215,6 +217,8 @@ rule link_mimtrnaseq_bam:
         outdir = f"{SCRATCH}/pass1_mimtrnaseq/{{sample}}",
     log:
         f"{SCRATCH}/logs/03_link_bam/{{sample}}.log",
+    resources:
+        runtime = 30,
     conda:
         "../../envs/environment.yaml"
     shell:

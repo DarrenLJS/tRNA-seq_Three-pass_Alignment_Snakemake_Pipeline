@@ -49,7 +49,12 @@ rule bowtie2_pretRNA:
         f"{SCRATCH}/benchmarks/05_pass2_pretRNA/{{sample}}.tsv",
     threads: lambda wildcards: BT2["threads"]
     resources:
-        mem_mb = config["resources"]["bowtie2_mem_mb"],
+        sge_pe    = "sharedmem",
+        runtime   = 480,
+        # FIX: was 4000M — insufficient for the hg38 bowtie2 index (~3.2 GB)
+        # plus 8-thread runtime overhead. Raised to 16000M so SGE reserves
+        # enough memory per slot and does not OOM-kill concurrent jobs.
+        sge_extra = "-V -l h_vmem=16000M"
     conda:
         "../../envs/environment.yaml"
     shell:
@@ -71,6 +76,7 @@ rule bowtie2_pretRNA:
             -2 {input.r2} \
             --un-conc-gz {params.outdir}/{wildcards.sample}.pretRNA_unmapped_R%.fq.gz \
             2> {output.align_stats} \
+        | awk '/^@/{{if(seen[$0]++)next}} 1' \
         | samtools sort -@ 4 -o {output.bam} -
 
         # Bowtie2 --un-conc-gz replaces % with 1 and 2, producing:

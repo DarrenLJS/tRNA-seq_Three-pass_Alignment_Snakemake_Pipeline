@@ -48,6 +48,8 @@ rule build_pretRNA_fasta:
         f"{SCRATCH}/logs/00_build_pretRNA_fasta.log",
     benchmark:
         f"{SCRATCH}/benchmarks/00_build_pretRNA_fasta.tsv",
+    resources:
+        runtime = 60,
     conda:
         "../../envs/environment.yaml"
     shell:
@@ -117,6 +119,8 @@ rule build_pretRNA_spliced_fasta:
         f"{SCRATCH}/logs/00_build_pretRNA_spliced_fasta.log",
     benchmark:
         f"{SCRATCH}/benchmarks/00_build_pretRNA_spliced_fasta.tsv",
+    resources:
+        runtime = 60,
     conda:
         "../../envs/environment.yaml"
     shell:
@@ -174,6 +178,10 @@ rule build_bowtie2_pretRNA_index:
     benchmark:
         f"{SCRATCH}/benchmarks/00_build_bowtie2_pretRNA_index.tsv",
     threads: lambda wildcards: config["bowtie2"]["threads"]
+    resources:
+        sge_pe    = "sharedmem",
+        runtime   = 60,
+        sge_extra = "-V -l h_vmem=4000M"
     conda:
         "../../envs/environment.yaml"
     shell:
@@ -220,6 +228,8 @@ rule build_anticodon_map:
         tsv = REF["anticodon_map"],
     log:
         f"{SCRATCH}/logs/00_build_anticodon_map.log",
+    resources:
+        runtime = 60,
     conda:
         "../../envs/environment.yaml"
     script:
@@ -243,6 +253,8 @@ rule filter_mirbase_human:
         hairpin_hsa = REF["mirbase_hairpin_hsa"],
     log:
         f"{SCRATCH}/logs/00_filter_mirbase_human.log",
+    resources:
+        runtime = 60,
     conda:
         "../../envs/environment.yaml"
     script:
@@ -283,6 +295,8 @@ rule convert_trnascan_out:
         standard = REF["gtrndb_standard_out"],
     log:
         f"{SCRATCH}/logs/00_convert_trnascan_out.log",
+    resources:
+        runtime = 60,
     shell:
         r"""
         set -euo pipefail
@@ -319,6 +333,8 @@ rule convert_namemap_nochr:
         namemap_nochr = REF["gtrndb_name_map_nochr"],
     log:
         f"{SCRATCH}/logs/00_convert_namemap_nochr.log",
+    resources:
+        runtime = 60,
     shell:
         r"""
         set -euo pipefail
@@ -360,6 +376,8 @@ rule build_trax_db:
         trax_dir = config["trax"]["script_dir"],
     log:
         f"{SCRATCH}/logs/00_build_trax_db.log",
+    resources:
+        runtime = 60,
     conda:
         "../../envs/trax_env.yaml"
     shell:

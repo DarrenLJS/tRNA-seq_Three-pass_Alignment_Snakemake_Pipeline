@@ -35,6 +35,9 @@ rule mirdeep2_pass3:
     This index was built once manually — do NOT rebuild per sample.
 
     Only R1 reads are used (5' end carries miRNA seed sequence).
+
+    If zero reads survive pass2 (all reads mapped to pre-tRNA), the rule
+    exits cleanly with empty outputs rather than crashing in mapper.pl.
     """
     input:
         r1           = f"{SCRATCH}/pass2_pretRNA/{{sample}}/{{sample}}.pretRNA_unmapped_R1.fq.gz",
@@ -55,7 +58,9 @@ rule mirdeep2_pass3:
         f"{SCRATCH}/benchmarks/06_pass3_mirna/{{sample}}.tsv",
     threads: lambda wildcards: MD2["threads"]
     resources:
-        mem_mb = config["resources"]["mirdeep2_mem_mb"],
+        sge_pe    = "sharedmem",
+        runtime   = 120,
+        sge_extra = "-V -l h_vmem=2000M"
     conda:
         "../../envs/environment.yaml"
     shell:
@@ -65,6 +70,20 @@ rule mirdeep2_pass3:
         cd {params.outdir}
 
         echo "[$(date)] Pass 3 miRDeep2 for {params.sample}..." > {log}
+
+        # FIX: guard against empty pass2 unmapped output.
+        # mapper.pl crashes with uninitialised-value Perl warnings when fed an
+        # empty FASTQ (all reads were absorbed by pass2 pre-tRNA alignment).
+        # Write valid empty outputs and exit 0 so downstream rules still run.
+        READ_COUNT=$(zcat {input.r1} | awk 'NR%4==1' | wc -l)
+        if [ "$READ_COUNT" -eq 0 ]; then
+            echo "[$(date)] Zero reads in pass2 unmapped input — skipping miRDeep2 for {params.sample}." >> {log}
+            touch {output.collapsed}
+            echo -e "#miRNA\tread_count\tnorm_count" > {output.counts}
+            echo -e "sample\ttotal_pass2_unmapped\tmirna_reads\tmirna_fraction" > {output.qc_summary}
+            echo -e "{params.sample}\t0\t0\t0.0000" >> {output.qc_summary}
+            exit 0
+        fi
 
         # Step 1: Decompress R1 (mapper.pl requires uncompressed input)
         zcat {input.r1} > {params.outdir}/{params.sample}_R1.fq

@@ -69,7 +69,13 @@ rule trax_quantify:
         f"{SCRATCH}/benchmarks/07_trax/{{cell_line}}.tsv",
     threads: lambda wildcards: TRAX_CFG["threads"]
     resources:
-        mem_mb = config["resources"]["trax_mem_mb"],
+        sge_pe    = "sharedmem",
+        runtime   = 480,
+        # FIX: was 4000M — insufficient when processsamples.py holds all 15
+        # per-sample merged BAMs in memory simultaneously for probabilistic
+        # multi-mapping assignment. Raised to 16000M to match bowtie2_pretRNA
+        # and avoid silent OOM kills on busy nodes.
+        sge_extra = "-V -l h_vmem=16000M"
     conda:
         "../../envs/trax_env.yaml"
     shell:

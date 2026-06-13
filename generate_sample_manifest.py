@@ -4,8 +4,8 @@
 import os, re, csv
 
 CELL_LINES = {
-    "A549": "/scratch/s2906787/A549/raw_files",
-    "THP1": "/scratch/s2906787/THP1/raw_files",
+    "A549": "/exports/eddie/scratch/s2906787/A549/raw_files",
+    "THP1": "/exports/eddie/scratch/s2906787/THP1/raw_files",
 }
 
 # A549 pattern: lane and read encoded in filename

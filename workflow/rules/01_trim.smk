@@ -71,8 +71,10 @@ rule trim_galore:
         f"{SCRATCH}/benchmarks/01_trim/{{sample}}.tsv",
     threads: lambda wildcards: TG["cores"]
     resources:
-        mem_mb = config["resources"]["trim_mem_mb"],
-        tmpdir = f"{SCRATCH}/tmp",
+        tmpdir    = f"{SCRATCH}/tmp",
+        sge_pe    = "sharedmem",
+        runtime   = 120,
+        sge_extra = "-V -l h_vmem=2000M"
     conda:
         "../../envs/environment.yaml"
     shell:

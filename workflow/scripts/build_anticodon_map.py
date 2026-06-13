@@ -16,13 +16,13 @@ with open(snakemake.input.fa) as fh:
 
         parts = locus.split("-")
         if (len(parts) >= 3
-                and parts[0] == "tRNA"
+                and parts[0].endswith("tRNA")
                 and len(parts[2]) == 3
                 and re.match(r'^[ACGTU]{3}$', parts[2])):
             entries[locus] = parts[2].replace("U", "T")
             continue
 
-        m = re.search(r'\(([ACGT]{3})\)\s*$', header)
+        m = re.search(r'\(([ACGT]{3})\)', header)
         if m:
             entries[locus] = m.group(1)
             continue

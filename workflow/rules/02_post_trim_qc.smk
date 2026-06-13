@@ -21,6 +21,10 @@ rule fastqc_post_trim:
     benchmark:
         f"{SCRATCH}/benchmarks/02_fastqc_post_trim/{{sample}}_{{read}}.tsv",
     threads: 2
+    resources:
+        sge_pe    = "sharedmem",
+        runtime   = 60,
+        sge_extra = "-V -l h_vmem=4000M"
     conda:
         "../../envs/environment.yaml"
     shell:
@@ -70,6 +74,8 @@ rule multiqc_post_trim:
         fname  = "{cell_line}_post_trim_multiqc",
     log:
         f"{SCRATCH}/logs/02_multiqc_post_trim/{{cell_line}}.log",
+    resources:
+        runtime = 60,
     conda:
         "../../envs/environment.yaml"
     shell:

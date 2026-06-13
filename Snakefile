@@ -54,7 +54,7 @@ import os
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-configfile: "config/config.yaml"
+configfile: "config/config_eddie.yaml"
 
 SCRATCH = config["scratch"]
 

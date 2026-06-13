@@ -7,52 +7,52 @@
 # Core paths
 # ---------------------------------------------------------------------------
 # Pipeline code lives in your workspace; all data/outputs go to scratch.
-manifest: "/home/s2906787/snakemake_pipeline/sample_manifest.tsv"
-scratch:   "/scratch/s2906787"
+manifest: "/exports/eddie/scratch/s2906787/snakemake_pipeline/sample_manifest.tsv"
+scratch:   "/exports/eddie/scratch/s2906787"
 
 # ---------------------------------------------------------------------------
 # Reference paths — all files confirmed present in /scratch/s2906787/references/
 # ---------------------------------------------------------------------------
 references:
   # -- GRCh38 primary assembly -----------------------------------------------
-  genome_fasta:  "/scratch/s2906787/references/GRCh38.primary_assembly.genome.fa"
-  genome_fai:    "/scratch/s2906787/references/GRCh38.primary_assembly.genome.fa.fai"
+  genome_fasta:  "/exports/eddie/scratch/s2906787/references/GRCh38.primary_assembly.genome.fa"
+  genome_fai:    "/exports/eddie/scratch/s2906787/references/GRCh38.primary_assembly.genome.fa.fai"
 
   # -- GtRNAdb Hsapi38 files -------------------------------------------------
   # chr-stripped versions for coordinate consistency with Ensembl FASTA
-  gtrndb_bed:              "/scratch/s2906787/references/hg38-tRNAs_nochr.bed"
-  gtrndb_fasta:            "/scratch/s2906787/references/hg38-tRNAs.fa"
-  gtrndb_mature:           "/scratch/s2906787/references/hg38-mature-tRNAs.fa"
-  gtrndb_filtered:         "/scratch/s2906787/references/hg38-filtered-tRNAs.fa"
-  gtrndb_introns:          "/scratch/s2906787/references/hg38-tRNA-introns_nochr.bed"
-  gtrndb_detailed_out:     "/scratch/s2906787/references/hg38-tRNAs-detailed.out"
-  gtrndb_confidence_out:   "/scratch/s2906787/references/hg38-tRNAs-confidence-set.out"
+  gtrndb_bed:              "/exports/eddie/scratch/s2906787/references/hg38-tRNAs_nochr.bed"
+  gtrndb_fasta:            "/exports/eddie/scratch/s2906787/references/hg38-tRNAs.fa"
+  gtrndb_mature:           "/exports/eddie/scratch/s2906787/references/hg38-mature-tRNAs.fa"
+  gtrndb_filtered:         "/exports/eddie/scratch/s2906787/references/hg38-filtered-tRNAs.fa"
+  gtrndb_introns:          "/exports/eddie/scratch/s2906787/references/hg38-tRNA-introns_nochr.bed"
+  gtrndb_detailed_out:     "/exports/eddie/scratch/s2906787/references/hg38-tRNAs-detailed.out"
+  gtrndb_confidence_out:   "/exports/eddie/scratch/s2906787/references/hg38-tRNAs-confidence-set.out"
   # Standard-format tRNAscan-SE output (9 columns) derived from the detailed
   # file by rule convert_trnascan_out in 00_reference_prep.smk.
   # tRAX maketrnadb.py requires this format; the detailed file has extra
   # columns (HMM Score, Isotype, etc.) that its parser does not recognise.
-  gtrndb_standard_out:     "/scratch/s2906787/references/hg38-tRNAs.out"
-  gtrndb_name_map:         "/scratch/s2906787/references/hg38-tRNAs_name_map.txt"
+  gtrndb_standard_out:     "/exports/eddie/scratch/s2906787/references/hg38-tRNAs.out"
+  gtrndb_name_map:         "/exports/eddie/scratch/s2906787/references/hg38-tRNAs_name_map.txt"
   # chr-stripped version of the name map (built by rule convert_namemap_nochr).
   # tRAX constructs tRNAscan IDs from the chr-stripped .out file (e.g. 1.trna1);
   # this file keeps the left column in sync so the lookup succeeds.
-  gtrndb_name_map_nochr:   "/scratch/s2906787/references/hg38-tRNAs_name_map_nochr.txt"
+  gtrndb_name_map_nochr:   "/exports/eddie/scratch/s2906787/references/hg38-tRNAs_name_map_nochr.txt"
 
   # -- Pre-tRNA reference (built by rule 00a/00b/00c) -----------------------
-  pretRNA_fasta:         "/scratch/s2906787/references/hg38_pretRNA_flanked50.fa"
-  pretRNA_fasta_spliced: "/scratch/s2906787/references/hg38_pretRNA_spliced.fa"
-  pretRNA_index:         "/scratch/s2906787/references/bowtie2_pretRNA/hg38_pretRNA"
+  pretRNA_fasta:         "/exports/eddie/scratch/s2906787/references/hg38_pretRNA_flanked50.fa"
+  pretRNA_fasta_spliced: "/exports/eddie/scratch/s2906787/references/hg38_pretRNA_spliced.fa"
+  pretRNA_index:         "/exports/eddie/scratch/s2906787/references/bowtie2_pretRNA/hg38_pretRNA"
 
   # -- Anticodon lookup table (built by rule 00d) ---------------------------
   # Parsed from new GtRNAdb name format: tRNA-Tyr-GTA-1-1 → GTA
-  anticodon_map:  "/scratch/s2906787/references/hg38_tRNA_anticodon_map.tsv"
+  anticodon_map:  "/exports/eddie/scratch/s2906787/references/hg38_tRNA_anticodon_map.tsv"
 
   # -- miRBase (human) -------------------------------------------------------
-  mirbase_mature_all:  "/scratch/s2906787/references/mature.fa"
-  mirbase_hairpin_all: "/scratch/s2906787/references/hairpin.fa"
+  mirbase_mature_all:  "/exports/eddie/scratch/s2906787/references/mature.fa"
+  mirbase_hairpin_all: "/exports/eddie/scratch/s2906787/references/hairpin.fa"
   # Filtered to hsa — built by rule filter_mirbase_human
-  mirbase_mature_hsa:  "/scratch/s2906787/references/mature_hsa.fa"
-  mirbase_hairpin_hsa: "/scratch/s2906787/references/hairpin_hsa.fa"
+  mirbase_mature_hsa:  "/exports/eddie/scratch/s2906787/references/mature_hsa.fa"
+  mirbase_hairpin_hsa: "/exports/eddie/scratch/s2906787/references/hairpin_hsa.fa"
 
   # -- mim-tRNAseq (uses its own internal GtRNAdb reference) ----------------
   mimtrnaseq_species: "Hsap"
@@ -60,10 +60,10 @@ references:
 
   # -- Bowtie1 genome index (pre-built for miRDeep2 Pass 3) -----------------
   # Built manually — do NOT let miRDeep2 rebuild this per sample
-  bowtie1_genome_index: "/scratch/s2906787/references/bowtie1_GRCh38/hg38"
+  bowtie1_genome_index: "/exports/eddie/scratch/s2906787/references/bowtie1_GRCh38/hg38"
 
   # -- TRAX database (built by rule build_trax_db) --------------------------
-  trax_ref_dir:  "/scratch/s2906787/references/trax_hsapi38"
+  trax_ref_dir:  "/exports/eddie/scratch/s2906787/references/trax_hsapi38"
 
 # ---------------------------------------------------------------------------
 # Trim Galore parameters
@@ -111,7 +111,7 @@ trax:
   # because tRAX is not a conda/pip package; only its dependencies are in
   # trax_env.yaml.  Clone with:
   #   git clone https://github.com/UCSC-LoweLab/tRAX.git /datastore/home/s2906787/tRAX
-  script_dir:     "/datastore/home/s2906787/tRAX"
+  script_dir:     "/exports/eddie3_homes_local/s2906787/tRAX"
   threads:        8
   min_unique_cov: 3    # discard tRFs with < 3 uniquely-mapping reads (proposal 3.8)
 

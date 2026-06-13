@@ -35,6 +35,8 @@ rule build_deseq2_inputs:
         manifest     = config["manifest"],   # FIX: required by collate_counts.py to build coldata
     log:
         f"{SCRATCH}/logs/08_deseq2_prep/{{cell_line}}.log",
+    resources:
+        runtime = 30,
     conda:
         "../../envs/environment.yaml"
     script:
@@ -81,6 +83,7 @@ rule build_read_assignment_summary:
     conda:
         "../../envs/environment.yaml"
     resources:
-        mem_mb = config["resources"]["read_assignment_mem_mb"],
+        runtime   = 30,
+        sge_extra = "-V -l h_vmem=2000M"
     script:
         "../scripts/build_read_assignment_summary.py"

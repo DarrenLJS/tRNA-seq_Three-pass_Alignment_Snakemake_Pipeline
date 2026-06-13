@@ -1,0 +1,27 @@
+# =============================================================================
+# ~/.config/snakemake/eddie/config.yaml
+# Snakemake profile for Eddie (SGE cluster)
+#
+# Place at: ~/.config/snakemake/eddie/config.yaml
+# Invoked via: snakemake --profile eddie
+# =============================================================================
+
+executor: sge
+jobs: 100                  # max concurrent SGE jobs submitted at once
+latency-wait: 60           # seconds to wait for output files after job ends (NFS latency)
+use-conda: true            # activate per-rule conda envs (envs/*.yaml)
+rerun-incomplete: true     # re-run jobs whose output files are incomplete
+keep-going: true           # continue submitting independent jobs if one fails
+
+# ---------------------------------------------------------------------------
+# Default resources applied to every job unless the rule overrides them.
+# NOTE: mem_mb is intentionally omitted — the snakemake-executor-plugin-sge
+# maps mem_mb to both h_vmem AND tmem; Eddie does not support tmem.
+# Memory is instead specified directly via sge_extra in each rule.
+# ---------------------------------------------------------------------------
+default-resources:
+  runtime: 240             # 4 hours; override in rules that need longer
+  threads: 1
+  mem_mb: 0
+  disk_mb: 0
+  sge_extra: "-V -l h_vmem=8000M"
