@@ -65,6 +65,9 @@ references:
   # -- TRAX database (built by rule build_trax_db) --------------------------
   trax_ref_dir:  "/exports/eddie/scratch/s2906787/references/trax_hsapi38"
 
+  # -- Ensembl genome annotation (required by tRAX makefeaturebed) ----------
+  ensembl_gtf: "/exports/eddie/scratch/s2906787/references/Homo_sapiens.GRCh38.109.gtf.gz"
+
 # ---------------------------------------------------------------------------
 # Trim Galore parameters
 # ---------------------------------------------------------------------------

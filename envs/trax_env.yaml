@@ -13,7 +13,7 @@ dependencies:
   - ucsc-bedgraphtobigwig>=377
   - ucsc-twobittofa>=377
   - bedtools>=2.30.0
-  - bowtie2>=2.5
+  - bowtie2>=2.4,<2.5   # 2.5.x broke BAM input via -U flag; tRAX requires <2.5
   - cutadapt>=4.1
   - infernal>=1.1.4
   - pysam>=0.19.1 

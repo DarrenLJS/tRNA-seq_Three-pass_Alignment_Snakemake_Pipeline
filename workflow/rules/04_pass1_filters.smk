@@ -5,8 +5,8 @@
 #
 #   Filter 1 — CCA filter
 #       The 3′ end of a mature tRNA carries the non-encoded CCA tail.
-#       R2 reads in the paired-end library prime from this 3′ end, so the
-#       first 3 bases of the aligned R2 query sequence should be "CCA".
+#       R2 reads prime from this 3′ end in REVERSE COMPLEMENT orientation,
+#       so the first 3 bases of R2 should be TGG (= RC of CCA), not CCA.
 #       Reads passing this filter are from fully matured tRNAs.
 #
 #   Filter 2 — Anticodon concordance filter
@@ -21,10 +21,12 @@
 # The CCA+anticodon pass rate is the PRIMARY internal QC metric
 # (target: ≥70% of Pass 1-aligned reads; proposal Section 4).
 #
-# NOTE: mim-tRNAseq aligns R1 only and produces single-end (unpaired) BAMs.
-# trimmed_r2 is therefore passed as an explicit input so the filter script
-# can (a) look up R2 sequences for the CCA check on mapped reads, and
-# (b) recover R2 mates for unmapped reads sent to Pass 2 (bowtie2_pretRNA).
+# NOTE: mim-tRNAseq aligns R1 only and produces single-end (unpaired) BAMs
+# with 100% mapping rate — unmapped reads are never written to the BAM.
+# FIX (2026-06-14): trimmed_r1 is now also required so the filter script can
+# recover unmapped R1 reads by streaming the FASTQ and writing reads whose
+# names are absent from the BAM's mapped set (Bug 2 fix). trimmed_r2 is
+# required for the TGG/NGG CCA check (RC orientation) on mapped reads (Bug 1).
 # =============================================================================
 
 rule cca_anticodon_filter:
@@ -32,15 +34,16 @@ rule cca_anticodon_filter:
     Apply CCA and anticodon concordance filters to a mim-tRNAseq BAM.
     Calls workflow/scripts/cca_anticodon_filter.py.
 
-    mim-tRNAseq produces single-end BAMs (R1 only). trimmed_r2 is supplied
-    so the script can perform the CCA check and re-pair unmapped reads for
-    the pre-tRNA alignment pass.
+    mim-tRNAseq produces single-end BAMs (R1 only, 100% mapping rate).
+    trimmed_r1 recovers unmapped reads absent from the BAM (Bug 2 fix).
+    trimmed_r2 is used for TGG/NGG CCA check in RC orientation (Bug 1 fix).
     """
     input:
         bam           = f"{SCRATCH}/pass1_mimtrnaseq/{{sample}}/{{sample}}.bam",
         bai           = f"{SCRATCH}/pass1_mimtrnaseq/{{sample}}/{{sample}}.bam.bai",
         anticodon_map = config["references"]["anticodon_map"],
-        trimmed_r2    = f"{SCRATCH}/trimmed/{{sample}}/{{sample}}_val_2.fq.gz",  # FIX: needed because mimtRNAseq BAMs are single-end
+        trimmed_r1    = f"{SCRATCH}/trimmed/{{sample}}/{{sample}}_val_1.fq.gz",  # FIX (Bug 2): recover unmapped R1 reads absent from BAM
+        trimmed_r2    = f"{SCRATCH}/trimmed/{{sample}}/{{sample}}_val_2.fq.gz",  # FIX (Bug 1): CCA check in RC orientation (TGG not CCA)
     output:
         filtered_bam = f"{SCRATCH}/pass1_filters/{{sample}}/{{sample}}.functional.bam",
         filtered_bai = f"{SCRATCH}/pass1_filters/{{sample}}/{{sample}}.functional.bam.bai",
@@ -49,7 +52,7 @@ rule cca_anticodon_filter:
         unmapped_r2  = f"{SCRATCH}/pass1_filters/{{sample}}/{{sample}}.unmapped_R2.fq.gz",
     params:
         outdir       = f"{SCRATCH}/pass1_filters/{{sample}}",
-        min_cca_qual = 20,   # min base quality at CCA positions to trust the call
+        min_cca_qual = 20,   # min base quality at TGG positions 1+2 (pos 0 skipped — often N on R2)
     log:
         f"{SCRATCH}/logs/04_pass1_filters/{{sample}}.log",
     benchmark:

@@ -31,6 +31,7 @@ Outputs (snakemake.output):
 
 import pandas as pd
 import os
+import re
 import logging
 
 # ---------------------------------------------------------------------------
@@ -82,21 +83,27 @@ def load_and_rename(counts_path, cl_samples):
     logger.info(f"Column names in file: {df.columns.tolist()}")
 
     # Build column rename map: file_column → sample_id
-    # mim-tRNAseq strips extensions from input filenames to form column headers.
-    # Expected pattern: {sample_id}_val_1 or {sample_id}
+    # FIX (2026-06-14): mim-tRNAseq uses FULL BAM PATHS as column headers, e.g.:
+    #   /scratch/.../A549_c2_1_val_1.fq.gz.unpaired_uniq.bam
+    # Extract basename then strip everything from _val_1/_val_2 onward.
+    # Also handles short names (legacy: "A549_c2_1_val_1") and exact matches.
+    # Non-sample metadata columns (Single_isodecoder, size, parent, Anticodon)
+    # will not match any sample_id and are silently skipped.
     rename_map = {}
     for col in df.columns:
-        # Try direct match first
+        # 1. Exact match
         if col in cl_samples:
             rename_map[col] = col
             continue
-        # Try stripping _val_1 suffix
-        stripped = col.replace("_val_1", "").replace("_val_2", "")
+        # 2. Extract basename from full path, strip mim-tRNAseq BAM suffix
+        #    e.g. ".../A549_c2_1_val_1.fq.gz.unpaired_uniq.bam" → "A549_c2_1"
+        basename = os.path.basename(col)
+        stripped = re.sub(r'_val_[12].*', '', basename)
         if stripped in cl_samples:
             rename_map[col] = stripped
             continue
-        # Warn if no match
-        logger.warning(f"Could not match column '{col}' to any sample_id")
+        # 3. Log non-sample columns at info level (not warning — they're expected)
+        logger.info(f"Skipping non-sample column: '{col}'")
 
     df = df.rename(columns=rename_map)
 

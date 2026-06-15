@@ -49,12 +49,17 @@ rule bowtie2_pretRNA:
         f"{SCRATCH}/benchmarks/05_pass2_pretRNA/{{sample}}.tsv",
     threads: lambda wildcards: BT2["threads"]
     resources:
-        sge_pe    = "sharedmem",
         runtime   = 480,
-        # FIX: was 4000M — insufficient for the hg38 bowtie2 index (~3.2 GB)
-        # plus 8-thread runtime overhead. Raised to 16000M so SGE reserves
-        # enough memory per slot and does not OOM-kill concurrent jobs.
-        sge_extra = "-V -l h_vmem=16000M"
+        # FIX: snakemake-executor-plugin-sge does not propagate the threads
+        # value to the PE slot count — it always submits -pe sharedmem 1
+        # regardless of the threads: directive. With Bowtie2 -p 8 and
+        # samtools sort -@ 4 running inside a single-slot allocation, SGE
+        # enforces its per-slot vmem ceiling and kills the process with SIGBUS
+        # (exit 135, failed 26). The fix is to specify -pe sharedmem 8
+        # directly in sge_extra so the plugin cannot override it, and size
+        # h_vmem per slot (4G × 8 slots = 32G total — well above the observed
+        # 10.6G peak vmem).
+        sge_extra = "-V -pe sharedmem 8 -l h_vmem=4000M"
     conda:
         "../../envs/environment.yaml"
     shell:

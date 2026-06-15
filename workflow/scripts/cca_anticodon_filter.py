@@ -13,22 +13,28 @@ FIX (2026-06-13): Replaced single-pass in-memory R2 dictionary with a
 memory-efficient two-pass approach. The original approach loaded all ~40M
 R2 reads into a Python dict (~30-40 GB), causing MemoryError on HPC nodes.
 
-New strategy:
-  Pass 1 (BAM scan)  — categorise every read as mapped or unmapped and
-                        store only the read name strings in two sets.
-                        Memory: ~2 × N × 140 bytes (strings only).
-  Pass 2 (FASTQ stream) — stream R2 once:
-      • For mapped reads:   evaluate the CCA check immediately; add to
-                            cca_pass set if it passes. Discard seq/qual.
-      • For unmapped reads: store full (seq, qual) in r2_unmapped dict
-                            for writing to the Pass-2 output FASTQ.
-  Pass 3 (BAM scan)  — main filter loop using cca_pass and r2_unmapped.
+FIX (2026-06-14) Bug 1 — CCA orientation:
+    R2 is sequenced FROM the 3′ CCA tail of the tRNA in REVERSE COMPLEMENT
+    orientation. CCA (5′→3′ on the tRNA) appears as TGG at the 5′ start of
+    R2, not CCA. Confirmed by diagnostic: 34% of R2 reads start with TGG vs
+    0.17% starting with CCA. Illumina R2 position 0 is also frequently
+    miscalled as N, so NGG is also accepted. Quality check skips position 0.
 
-Typical memory saving (40M-read library, 50% mapping):
-  Before: ~30-40 GB  |  After: ~8-12 GB
+FIX (2026-06-14) Bug 2 — Unmapped read recovery:
+    mim-tRNAseq writes ONLY mapped reads to its BAM (100% mapping rate
+    confirmed; 0 is_unmapped reads). The previous code found no unmapped
+    reads in the BAM and wrote empty unmapped FASTQs, leaving ~55 M reads
+    stranded with nothing feeding into Pass 2 (Bowtie2 pre-tRNA).
+    Fix: stream trimmed_r1 and trimmed_r2 simultaneously; any read pair
+    whose name is absent from mapped_names is written directly to disk
+    without buffering in memory. trimmed_r1 is now a required input.
 
-All output files and stat key names are unchanged; downstream rules
-are unaffected.
+New three-pass strategy:
+  Pass 1 (BAM scan)     — collect all mapped read names into mapped_names.
+  Pass 2 (FASTQ stream) — stream R1 + R2 simultaneously:
+      • name in mapped_names  → TGG/NGG CCA check on R2 → add to cca_pass
+      • name not in mapped_names → write to unmapped_r1 / unmapped_r2
+  Pass 3 (BAM scan)     — CCA + anticodon filter → write filtered_bam.
 """
 
 import pysam
@@ -42,6 +48,7 @@ import re
 # ---------------------------------------------------------------------------
 bam_path       = snakemake.input.bam
 anticodon_map  = snakemake.input.anticodon_map
+trimmed_r1     = snakemake.input.trimmed_r1    # FIX (Bug 2): recover unmapped R1 reads absent from BAM
 trimmed_r2     = snakemake.input.trimmed_r2
 filtered_bam   = snakemake.output.filtered_bam
 filtered_bai   = snakemake.output.filtered_bai
@@ -87,14 +94,26 @@ def ref_anticodon(ref_name):
     return None
 
 
-def check_cca_fastq(seq, qual_str, min_qual=20):
+def check_cca_r2(seq, qual_str, min_qual=20):
+    """
+    FIX (Bug 1): R2 reads from the 3' CCA end of tRNA in REVERSE COMPLEMENT.
+    CCA on the tRNA (5'→3') appears as TGG at the 5' start of R2.
+
+    Two Illumina R2 artefacts handled:
+      - Position 0 is frequently miscalled as N (low first-cycle confidence).
+        Accept T or N at position 0.
+      - Quality at position 0 is often '#' (Phred 2). Skip quality check there.
+    """
     if len(seq) < 3:
         return False
-    if seq[:3] != "CCA":
+    if seq[0] not in ("T", "N"):   # TGG or NGG both accepted
         return False
-    if not qual_str or len(qual_str) < 3:
-        return True
-    return all((ord(qual_str[i]) - 33) >= min_qual for i in range(3))
+    if seq[1:3] != "GG":
+        return False
+    # Quality check on positions 1 and 2 only (skip unreliable pos 0)
+    if qual_str and len(qual_str) >= 3:
+        return all((ord(qual_str[i]) - 33) >= min_qual for i in range(1, 3))
+    return True
 
 
 def is_anticodon_concordant(read):
@@ -110,143 +129,153 @@ def phred_to_str(quals):
 
 
 # ---------------------------------------------------------------------------
-# Pass 1: scan BAM to categorise reads as mapped or unmapped
+# Pass 1: scan BAM to build mapped_names set
 # ---------------------------------------------------------------------------
-# We store only the name strings — no sequences — so memory scales with
-# N × ~140 bytes rather than N × ~500 bytes (full seq/qual dict).
+# FIX (Bug 2): mim-tRNAseq writes ONLY mapped reads to its BAM (100% mapping
+# rate confirmed). There are no is_unmapped reads in this file. Unmapped reads
+# are recovered by FASTQ subtraction in Pass 2.
 # ---------------------------------------------------------------------------
-logger.info("Pass 1: scanning BAM to categorise reads (mapped vs unmapped)...")
-mapped_names   = set()
-unmapped_names = set()
+logger.info("Pass 1: building mapped_names set from BAM (all reads are mapped)...")
+mapped_names = set()
 
 with pysam.AlignmentFile(bam_path, "rb") as bam_scan:
     for read in bam_scan:
-        if read.is_unmapped:
-            unmapped_names.add(read.query_name)
-        else:
-            mapped_names.add(read.query_name)
+        mapped_names.add(read.query_name)
 
-logger.info(
-    f"Pass 1 complete: {len(mapped_names):,} mapped reads, "
-    f"{len(unmapped_names):,} unmapped reads"
-)
+logger.info(f"Pass 1 complete: {len(mapped_names):,} mapped read names")
 
 # ---------------------------------------------------------------------------
-# Pass 2: stream R2 FASTQ once
-#   • mapped reads   → evaluate CCA immediately; store name in cca_pass if OK
-#   • unmapped reads → store full (seq, qual) for Pass-2 FASTQ output
+# Pass 2: stream trimmed R1 + R2 FASTQs simultaneously
+#
+# FIX (Bug 1): CCA check now looks for TGG/NGG at R2 start (RC of CCA).
+# FIX (Bug 2): unmapped reads are recovered here by FASTQ subtraction —
+#   reads absent from mapped_names are written directly to disk without
+#   buffering in memory (avoids storing ~55 M sequences as a Python dict).
 # ---------------------------------------------------------------------------
-logger.info(f"Pass 2: streaming R2 FASTQ from {trimmed_r2} ...")
-cca_pass   = set()   # names of mapped reads that pass the CCA filter
-r2_unmapped = {}     # name → (seq, qual) for unmapped reads only
+logger.info(f"Pass 2: streaming R1+R2 FASTQs to check CCA and recover unmapped reads...")
 
-open_fn = gzip.open if trimmed_r2.endswith(".gz") else open
-with open_fn(trimmed_r2, "rt") as fh:
+cca_pass = set()   # read names whose R2 starts with TGG/NGG (= RC of CCA)
+
+fastq_counters = {
+    "total_input"     : 0,
+    "mapped_seen"     : 0,
+    "cca_pass"        : 0,
+    "cca_fail"        : 0,
+    "unmapped_written": 0,
+    "name_mismatch"   : 0,
+}
+
+open_r1 = gzip.open if trimmed_r1.endswith(".gz") else open
+open_r2 = gzip.open if trimmed_r2.endswith(".gz") else open
+
+with (open_r1(trimmed_r1, "rt") as r1_fh,
+      open_r2(trimmed_r2, "rt") as r2_fh,
+      gzip.open(unmapped_r1, "wt") as out_r1,
+      gzip.open(unmapped_r2, "wt") as out_r2):
+
     while True:
-        header = fh.readline()
-        if not header:
+        # R1 record
+        r1_hdr = r1_fh.readline()
+        if not r1_hdr:
             break
-        seq  = fh.readline().strip()
-        fh.readline()             # '+' line — discard
-        qual = fh.readline().strip()
-        name = header.strip().lstrip("@").split()[0]
+        r1_seq  = r1_fh.readline().strip()
+        r1_fh.readline()            # '+' line — discard
+        r1_qual = r1_fh.readline().strip()
+        r1_name = r1_hdr.strip().lstrip("@").split()[0]
 
-        if name in mapped_names:
-            # Only CCA check needed — discard seq/qual afterwards
-            if check_cca_fastq(seq, qual, min_qual=min_cca_qual):
-                cca_pass.add(name)
+        # R2 record
+        r2_hdr  = r2_fh.readline()
+        if not r2_hdr:
+            logger.warning("R2 FASTQ ended before R1 — mismatched read counts")
+            break
+        r2_seq  = r2_fh.readline().strip()
+        r2_fh.readline()            # '+' line — discard
+        r2_qual = r2_fh.readline().strip()
+        r2_name = r2_hdr.strip().lstrip("@").split()[0]
 
-        elif name in unmapped_names:
-            # Full seq/qual needed to write R2 mate to the Pass-2 FASTQ
-            r2_unmapped[name] = (seq, qual)
+        fastq_counters["total_input"] += 1
 
-# Free mapped_names — no longer needed
+        if r1_name != r2_name:
+            fastq_counters["name_mismatch"] += 1
+            logger.warning(
+                f"R1/R2 name mismatch at pair {fastq_counters['total_input']:,}: "
+                f"R1={r1_name}, R2={r2_name} — skipping pair"
+            )
+            continue
+
+        if r1_name in mapped_names:
+            fastq_counters["mapped_seen"] += 1
+            if check_cca_r2(r2_seq, r2_qual, min_qual=min_cca_qual):
+                cca_pass.add(r1_name)
+                fastq_counters["cca_pass"] += 1
+            else:
+                fastq_counters["cca_fail"] += 1
+        else:
+            # Unmapped: write both mates for Pass 2 (Bowtie2 pre-tRNA)
+            out_r1.write(f"@{r1_name}\n{r1_seq}\n+\n{r1_qual}\n")
+            out_r2.write(f"@{r2_name}\n{r2_seq}\n+\n{r2_qual}\n")
+            fastq_counters["unmapped_written"] += 1
+
+# mapped_names no longer needed — free memory before Pass 3
 del mapped_names
 
 logger.info(
-    f"Pass 2 complete: {len(cca_pass):,} mapped reads pass CCA filter, "
-    f"{len(r2_unmapped):,} unmapped R2 reads stored"
+    f"Pass 2 complete: "
+    f"total_input={fastq_counters['total_input']:,}, "
+    f"mapped={fastq_counters['mapped_seen']:,}, "
+    f"cca_pass={fastq_counters['cca_pass']:,} "
+    f"({fastq_counters['cca_pass']/max(fastq_counters['mapped_seen'],1)*100:.1f}%), "
+    f"unmapped_written={fastq_counters['unmapped_written']:,}"
 )
+if fastq_counters["name_mismatch"] > 0:
+    logger.warning(
+        f"{fastq_counters['name_mismatch']:,} R1/R2 name mismatches — "
+        f"verify trimmed_r1 and trimmed_r2 are from the same sample."
+    )
 
 # ---------------------------------------------------------------------------
-# Pass 3: main filter loop using pre-computed structures
+# Pass 3: scan BAM and apply CCA + anticodon filters → write filtered_bam
 # ---------------------------------------------------------------------------
-counters = {
-    "total_pairs"    : 0,
-    "both_unmapped"  : 0,
-    "r1_only_mapped" : 0,
-    "r2_only_mapped" : 0,
-    "both_mapped"    : 0,
+# Unmapped reads are already written to disk in Pass 2.
+# This pass only handles mapped reads: CCA result from cca_pass, then
+# anticodon concordance check.
+# ---------------------------------------------------------------------------
+bam_counters = {
+    "total_aligned"  : 0,
     "cca_fail"       : 0,
     "anticodon_fail" : 0,
     "both_pass"      : 0,
-    "total_aligned"  : 0,
-    "r2_missing"     : 0,
 }
 
-bam_in      = pysam.AlignmentFile(bam_path, "rb")
-out_bam     = pysam.AlignmentFile(filtered_bam, "wb", header=bam_in.header)
-fh_unmap_r1 = gzip.open(unmapped_r1, "wt")
-fh_unmap_r2 = gzip.open(unmapped_r2, "wt")
+bam_in  = pysam.AlignmentFile(bam_path, "rb")
+out_bam = pysam.AlignmentFile(filtered_bam, "wb", header=bam_in.header)
 
-logger.info("Pass 3: processing BAM reads and writing outputs...")
+logger.info("Pass 3: filtering BAM reads (CCA + anticodon)...")
 
 for read in bam_in:
-    qname = read.query_name
-    counters["total_pairs"] += 1
+    bam_counters["total_aligned"] += 1
 
-    if read.is_unmapped:
-        counters["both_unmapped"] += 1
-
-        if read.query_sequence:
-            qual_str = phred_to_str(read.query_qualities)
-            fh_unmap_r1.write(f"@{qname}\n{read.query_sequence}\n+\n{qual_str}\n")
-
-        r2_entry = r2_unmapped.get(qname)
-        if r2_entry is not None:
-            fh_unmap_r2.write(f"@{qname}\n{r2_entry[0]}\n+\n{r2_entry[1]}\n")
-        else:
-            logger.debug(f"No R2 in trimmed FASTQ for unmapped read: {qname}")
-
+    if read.query_name not in cca_pass:
+        bam_counters["cca_fail"] += 1
         continue
 
-    # Mapped read
-    counters["both_mapped"]   += 1
-    counters["total_aligned"] += 1
-
-    # CCA filter — result already computed in Pass 2
-    if qname not in cca_pass:
-        counters["cca_fail"] += 1
-        # Check if it was missing from FASTQ entirely vs just failing CCA
-        if qname not in unmapped_names:
-            counters["r2_missing"] += 1
-        continue
-
-    # Anticodon concordance filter
     if not is_anticodon_concordant(read):
-        counters["anticodon_fail"] += 1
+        bam_counters["anticodon_fail"] += 1
         continue
 
-    counters["both_pass"] += 1
+    bam_counters["both_pass"] += 1
     out_bam.write(read)
 
 bam_in.close()
 out_bam.close()
-fh_unmap_r1.close()
-fh_unmap_r2.close()
 
 logger.info(
-    f"Pass 3 complete. "
-    f"mapped={counters['both_mapped']:,}, "
-    f"unmapped={counters['both_unmapped']:,}, "
-    f"passed={counters['both_pass']:,}"
+    f"Pass 3 complete: "
+    f"total_aligned={bam_counters['total_aligned']:,}, "
+    f"cca_fail={bam_counters['cca_fail']:,}, "
+    f"anticodon_fail={bam_counters['anticodon_fail']:,}, "
+    f"both_pass={bam_counters['both_pass']:,}"
 )
-
-if counters["r2_missing"] > 0:
-    logger.warning(
-        f"{counters['r2_missing']:,} mapped reads had no matching R2 in "
-        f"the trimmed FASTQ — verify that trimmed_r2 is for the correct sample."
-    )
 
 # ---------------------------------------------------------------------------
 # Sort and index the filtered BAM
@@ -260,24 +289,26 @@ pysam.index(filtered_bam)
 # ---------------------------------------------------------------------------
 # Write filter statistics (schema identical to original)
 # ---------------------------------------------------------------------------
-total_al        = counters["total_aligned"]
-functional_rate = counters["both_pass"] / total_al if total_al > 0 else 0.0
+total_al        = bam_counters["total_aligned"]
+functional_rate = bam_counters["both_pass"] / total_al if total_al > 0 else 0.0
 cca_rate        = (
-    (total_al - counters["cca_fail"]) / total_al if total_al > 0 else 0.0
+    fastq_counters["cca_pass"] / total_al if total_al > 0 else 0.0
 )
 
 stats_rows = {
     "sample"         : sample_id,
-    "total_pairs"    : counters["total_pairs"],
-    "both_unmapped"  : counters["both_unmapped"],
-    "both_mapped"    : counters["both_mapped"],
-    "total_aligned"  : counters["total_aligned"],
-    "cca_fail"       : counters["cca_fail"],
-    "anticodon_fail" : counters["anticodon_fail"],
-    "both_pass"      : counters["both_pass"],
+    "total_pairs"    : fastq_counters["total_input"],
+    "both_unmapped"  : fastq_counters["unmapped_written"],
+    "both_mapped"    : fastq_counters["mapped_seen"],
+    "total_aligned"  : total_al,
+    "cca_pass"       : fastq_counters["cca_pass"],
+    "cca_fail"       : fastq_counters["cca_fail"],
+    "anticodon_pass" : bam_counters["both_pass"],
+    "anticodon_fail" : bam_counters["anticodon_fail"],
+    "both_pass"      : bam_counters["both_pass"],
     "cca_pass_rate"  : round(cca_rate, 4),
     "functional_rate": round(functional_rate, 4),
-    "unmapped"       : counters["both_unmapped"],
+    "unmapped"       : fastq_counters["unmapped_written"],
 }
 
 with open(stats_path, "w") as sf:
@@ -297,6 +328,7 @@ else:
     )
 
 logger.info(
-    f"Filter complete. Kept {counters['both_pass']:,} / {total_al:,} aligned reads."
+    f"Filter complete. Kept {bam_counters['both_pass']:,} / {total_al:,} aligned reads "
+    f"({functional_rate:.1%})."
 )
 logger.info("CCA+anticodon filter done.")

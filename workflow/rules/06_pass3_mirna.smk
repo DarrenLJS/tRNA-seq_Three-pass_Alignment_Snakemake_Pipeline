@@ -60,7 +60,12 @@ rule mirdeep2_pass3:
     resources:
         sge_pe    = "sharedmem",
         runtime   = 120,
-        sge_extra = "-V -l h_vmem=2000M"
+        # FIX: was 2000M — Bowtie1 mapping against hg38 peaked at 2.54G vmem,
+        # exceeding the 2G limit and triggering an SGE OOM kill (exit 137,
+        # failed 46). Raised to 6000M to give comfortable headroom.
+        # mapper.pl and quantifier.pl are effectively single-threaded so
+        # 1 slot is sufficient; only memory needed to be increased.
+        sge_extra = "-V -l h_vmem=6000M"
     conda:
         "../../envs/environment.yaml"
     shell:
