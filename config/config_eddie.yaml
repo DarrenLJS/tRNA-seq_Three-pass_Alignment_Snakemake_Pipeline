@@ -138,4 +138,7 @@ resources:
   cca_filter_mem_mb:       16000   # r2_dict (~1-2 GB) + BAM buffers; no unmapped lists (streamed)
   mirdeep2_mem_mb:         8000   # mapper.pl + quantifier.pl + Bowtie1 index
   trax_mem_mb:            16000   # TRAX processsamples.py across all cell-line BAMs
+  trax_runtime_min:        4320   # 72 h — tRAX maps+quantifies 15 samples per cell line;
+                                  # 24 h was insufficient (jobs hit wall clock at ~18.5 h
+                                  # mid-bowtie2). Raised from 1440. Uses igmm_long queue.
   read_assignment_mem_mb:  2000   # pandas summary script; small TSV parsing only

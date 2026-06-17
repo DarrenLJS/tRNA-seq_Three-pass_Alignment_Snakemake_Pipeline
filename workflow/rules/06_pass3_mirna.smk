@@ -95,6 +95,10 @@ rule mirdeep2_pass3:
 
         # Step 2: mapper.pl — collapse reads and map to genome
         # -p: pre-built Bowtie 1 index prefix (do NOT rebuild)
+        # FIX: mapper.pl refuses to overwrite an existing .arf file and exits
+        # non-zero, causing the whole job to fail under set -euo pipefail.
+        # Remove any stale .arf from a previous partial run before proceeding.
+        rm -f {params.outdir}/{params.sample}_mapped.arf
         mapper.pl \
             {params.outdir}/{params.sample}_R1.fq \
             -e \
@@ -138,8 +142,13 @@ rule mirdeep2_pass3:
                 printf "%s\t%d\t%d\t%.4f\n", s, t, m, frac
             }}' >> {output.qc_summary}
 
-        # Clean up temporary uncompressed file
+        # Clean up temporary uncompressed file and mapper.pl working directory.
+        # mapper.pl creates a dir_mapper_seq_*/ temp dir alongside the input fq
+        # and does not remove it on exit. On a quota-limited filesystem these
+        # accumulate across samples and cause subsequent runs to fail with
+        # "Disk quota exceeded".
         rm -f {params.outdir}/{params.sample}_R1.fq
+        rm -rf {params.outdir}/dir_mapper_seq_*
 
         echo "[$(date)] Pass 3 miRDeep2 complete for {params.sample}." >> {log}
         """

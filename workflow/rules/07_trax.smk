@@ -31,6 +31,22 @@
 #        --outputdir -> removed (tRAX has no --outputdir; outputs go to CWD)
 #        (new)       -> --experimentname (required)
 #        (new)       -> cd to outdir before running so outputs land there
+# FIX HISTORY (2026-06-16):
+#   8. Wall-clock timeout: both cell lines hit h_rt=24h mid-bowtie2 (~18.5 h
+#      elapsed, mapping still in progress for THP1). runtime raised from
+#      1440 -> 4320 min (72 h) and pulled from
+#      config["resources"]["trax_runtime_min"] so it can be adjusted without
+#      editing this file.
+# FIX HISTORY (2026-06-15):
+#   7. Disk quota failures on rerun:
+#      Merged BAMs + FASTQs (~100 GB) were never deleted after a successful
+#      tRAX run. On the next Snakemake rerun the merge loop re-created them on
+#      top of the existing files, exhausting disk quota and causing samtools to
+#      report the misleading error "failed writing: No such file or directory".
+#      Fix A: fast-path check moved to BEFORE the merge loop so a rerun skips
+#      all BAM/FASTQ I/O entirely when outputs already exist.
+#      Fix B: merged BAMs, index files, and FASTQs are deleted after a
+#      successful tRAX run since they are pure intermediates.
 # FIX HISTORY (2026-06-14):
 #   4. SGE RSS kill (exit 137, failed 47: execd enforced h_rss limit):
 #      Snakemake head-node runs with --cores 1, which caps job.threads to 1
@@ -101,9 +117,13 @@ rule trax_quantify:
         trax_db      = config["references"]["trax_ref_dir"],
         ensembl_gtf  = config["references"]["ensembl_gtf"],
     output:
-        readcounts      = f"{SCRATCH}/trax/{{cell_line}}/{{cell_line}}/{{cell_line}}-readcounts.txt",
-        trnacounts      = f"{SCRATCH}/trax/{{cell_line}}/{{cell_line}}/{{cell_line}}-trnacounts.txt",
-        anticodoncounts = f"{SCRATCH}/trax/{{cell_line}}/{{cell_line}}/{{cell_line}}-anticodoncounts.txt",
+        # FIX: corrected filenames to match actual tRAX output (verified from
+        # ls trax/A549/A549/ after a completed run). The originally declared
+        # names (-readcounts.txt, -trnacounts.txt, -anticodoncounts.txt) do not
+        # exist; tRAX produces these instead:
+        readcounts      = f"{SCRATCH}/trax/{{cell_line}}/{{cell_line}}/{{cell_line}}-normalizedreadcounts.txt",
+        trnacounts      = f"{SCRATCH}/trax/{{cell_line}}/{{cell_line}}/{{cell_line}}-trnamapinfo.txt",
+        anticodoncounts = f"{SCRATCH}/trax/{{cell_line}}/{{cell_line}}/{{cell_line}}-aminocounts.txt",
         sample_file  = f"{SCRATCH}/trax/{{cell_line}}/trax_samples.txt",
     params:
         outdir      = f"{SCRATCH}/trax/{{cell_line}}",
@@ -119,7 +139,7 @@ rule trax_quantify:
         f"{SCRATCH}/benchmarks/07_trax/{{cell_line}}.tsv",
     threads: lambda wildcards: TRAX_CFG["threads"]
     resources:
-        runtime   = 480,
+        runtime   = config["resources"]["trax_runtime_min"],  # FIX 8: 1440->4320 min (72h); pulled from config
         # FIX 4: sge_pe removed -- the eddie profile emits -pe sge_pe threads,
         # but Snakemake caps threads to 1 (head node uses --cores 1), so only
         # 1 slot was granted while tRAX ran 8 bowtie2 processes -> RSS kill.
@@ -136,6 +156,24 @@ rule trax_quantify:
         exec > {log} 2>&1
 
         echo "[$(date)] Building merged BAMs for cell line: {wildcards.cell_line}"
+
+        # FIX 7A: fast-path moved to BEFORE the merge loop.
+        # If the primary tRAX output already exists, skip all BAM/FASTQ I/O
+        # and processsamples.py. Just regenerate the sample file (which Snakemake
+        # deleted as a "corrupted" output) and exit 0.
+        if [ -f "{output.readcounts}" ]; then
+            echo "[$(date)] tRAX outputs already present — fast-path: regenerating sample file only."
+            > {output.sample_file}
+            for SAMPLE in {params.samples}; do
+                READS={params.outdir}/merged_bams/$SAMPLE.fastq
+                COND_CHAR=$(echo "$SAMPLE" | cut -d_ -f2 | cut -c1)
+                COND="control"
+                [ "$COND_CHAR" = "p" ] && COND="polyi"
+                printf "%s\t%s\t%s\n" "$SAMPLE" "$COND" "$READS" >> {output.sample_file}
+            done
+            echo "[$(date)] TRAX fast-path complete for {wildcards.cell_line}."
+            exit 0
+        fi
 
         # Step 1: merge BAMs, convert to FASTQ, write sample file.
         # FIX 5: tRAX needs FASTQ not aligned BAM (bowtie2 uses -U flag).
@@ -192,8 +230,12 @@ rule trax_quantify:
 
         echo "[$(date)] TRAX complete for {wildcards.cell_line}."
 
-        # NOTE: if Snakemake reports MissingOutputException after a successful
-        # tRAX run, the declared output paths may not match what tRAX produces.
-        # Check: ls {params.outdir}/counts/
-        # and update the output block to match the actual filenames.
+        # FIX 7B: delete large intermediates after a successful tRAX run.
+        # Merged BAMs + FASTQs are ~100 GB+ combined and are not needed once
+        # tRAX has finished. Leaving them caused disk quota failures on reruns.
+        echo "[$(date)] Cleaning up intermediate merged BAMs and FASTQs..."
+        rm -f {params.outdir}/merged_bams/*.merged.bam
+        rm -f {params.outdir}/merged_bams/*.merged.bam.bai
+        rm -f {params.outdir}/merged_bams/*.fastq
+        echo "[$(date)] Cleanup complete."
         """

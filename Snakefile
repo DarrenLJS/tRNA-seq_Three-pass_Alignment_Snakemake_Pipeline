@@ -148,7 +148,7 @@ rule all:
         ),
         # ── TRAX: per-cell-line tRF count tables ─────────────────────────
         expand(
-            "{scratch}/trax/{cell_line}/{cell_line}/{cell_line}-readcounts.txt",
+            "{scratch}/trax/{cell_line}/{cell_line}/{cell_line}-normalizedreadcounts.txt",
             scratch=SCRATCH,
             cell_line=CELL_LINES,
         ),
