@@ -77,7 +77,7 @@ trim_galore:
   #   R2: Illumina Small RNA 3-prime Adapter
   adapter_r1:   "AGATCGGAAGAGC"
   adapter_r2:   "TGGAATTCTCGGGTGCCAAGG"
-  min_length:   15      # retain tRFs (minimum 15 nt per proposal Section 3.2)
+  min_length:   12      # retain tRFs (minimum 12 nt)
   quality:      20      # Phred Q20 5-prime quality trimming
   cores:        8       # cutadapt threads per sample
 
