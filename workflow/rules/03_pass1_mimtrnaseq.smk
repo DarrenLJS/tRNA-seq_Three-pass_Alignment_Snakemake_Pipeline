@@ -94,9 +94,17 @@ rule mimtrnaseq:
         f"{SCRATCH}/benchmarks/03_mimtrnaseq/{{cell_line}}.tsv",
     threads: lambda wildcards: MIM["threads"]
     resources:
-        sge_pe    = "sharedmem",
-        runtime   = 480,
-        sge_extra = "-V -l h_vmem=8000M"
+        # FIX: was sge_pe="sharedmem" + a hardcoded "-V -l h_vmem=8000M"
+        # literal — same broken pattern already fixed in trim_galore,
+        # bowtie2_pretRNA, and trax_quantify (sge_pe collapses to 1 SGE
+        # slot under the EDDIE profile's --cores 1, regardless of
+        # threads:). mim-tRNAseq's GSNAP alignment genuinely uses
+        # --threads {params.threads} (8) in parallel, so this was a real
+        # latent OOM risk that simply hadn't been hit yet. sge_extra()
+        # hardcodes "-pe sharedmem N" so the plugin can't collapse it;
+        # slots/vmem/runtime now live in config["resources"]["mimtrnaseq"].
+        runtime   = config["resources"]["mimtrnaseq"]["runtime_min"],
+        sge_extra = sge_extra("mimtrnaseq"),
     conda:
         "../../envs/mimseq.yaml"
     shell:

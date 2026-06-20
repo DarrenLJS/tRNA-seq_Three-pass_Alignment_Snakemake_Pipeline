@@ -31,11 +31,24 @@
 #        --outputdir -> removed (tRAX has no --outputdir; outputs go to CWD)
 #        (new)       -> --experimentname (required)
 #        (new)       -> cd to outdir before running so outputs land there
+# FIX HISTORY (2026-06-18):
+#   9. Mapping phase ran in two sequential waves: TRAX's --cores controls how
+#      many samples map concurrently, but each internal bowtie2 call is
+#      single-threaded (-p 1) -- TRAX has no per-sample multithreading lever.
+#      With --cores 8 and 15 samples/cell line, mapping ran as 8-then-7
+#      sequential waves, contributing the bulk of a 22.5h mapping+counting
+#      phase (A549: 09:40 start -> next-day 08:19 complete). Raised
+#      trax.threads 8->16 (config) and -pe sharedmem 8->16 (this file) so all
+#      15 samples map in a single wave. h_vmem kept at 8000M/slot (128G total
+#      budget); prior peak was ~44G against a 64G budget at 8 slots, so this
+#      preserves the same headroom ratio at 16. Eddie nodes are 32-128 core
+#      (confirmed via qhost), so 16 sharedmem slots carries no queue risk.
 # FIX HISTORY (2026-06-16):
 #   8. Wall-clock timeout: both cell lines hit h_rt=24h mid-bowtie2 (~18.5 h
 #      elapsed, mapping still in progress for THP1). runtime raised from
 #      1440 -> 4320 min (72 h) and pulled from
-#      config["resources"]["trax_runtime_min"] so it can be adjusted without
+#      config["resources"]["trax_quantify"]["runtime_min"] so it can be
+#      adjusted without
 #      editing this file.
 # FIX HISTORY (2026-06-15):
 #   7. Disk quota failures on rerun:
@@ -139,13 +152,20 @@ rule trax_quantify:
         f"{SCRATCH}/benchmarks/07_trax/{{cell_line}}.tsv",
     threads: lambda wildcards: TRAX_CFG["threads"]
     resources:
-        runtime   = config["resources"]["trax_runtime_min"],  # FIX 8: 1440->4320 min (72h); pulled from config
         # FIX 4: sge_pe removed -- the eddie profile emits -pe sge_pe threads,
         # but Snakemake caps threads to 1 (head node uses --cores 1), so only
         # 1 slot was granted while tRAX ran 8 bowtie2 processes -> RSS kill.
-        # Hard-wiring -pe sharedmem 8 in sge_extra bypasses thread-scaling.
-        # 8 slots x 8000M = 64G total RSS budget.
-        sge_extra = "-V -pe sharedmem 8 -l h_vmem=8000M"
+        # sge_extra() hard-wires -pe sharedmem N directly, bypassing
+        # thread-scaling entirely.
+        # FIX 9: 8->16 slots so all 15 samples map in a single TRAX wave
+        # instead of two sequential waves of 8 and 7.
+        # FIX (config tidy-up): slots/vmem/runtime now live in
+        # config["resources"]["trax_quantify"] (was the standalone
+        # config["resources"]["trax_runtime_min"] key plus a hardcoded
+        # "-V -pe sharedmem 16 -l h_vmem=8000M" literal here) — adjust
+        # there, not here. 16 slots x 8000M = 128G total RSS budget.
+        runtime   = config["resources"]["trax_quantify"]["runtime_min"],
+        sge_extra = sge_extra("trax_quantify"),
     conda:
         "../../envs/trax_env.yaml"
     shell:

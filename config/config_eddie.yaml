@@ -115,7 +115,15 @@ trax:
   # trax_env.yaml.  Clone with:
   #   git clone https://github.com/UCSC-LoweLab/tRAX.git /datastore/home/s2906787/tRAX
   script_dir:     "/exports/eddie3_homes_local/s2906787/tRAX"
-  threads:        8
+  threads:        16    # FIX 9 (2026-06-18): raised 8->16. With 15 samples/cell
+                         # line, --cores 8 forced TRAX's internal mapping step to
+                         # run samples in two sequential waves (8, then 7). Each
+                         # bowtie2 call inside TRAX is single-threaded (-p 1);
+                         # TRAX's only parallelism lever is running more samples
+                         # concurrently via --cores. 16 lets all 15 samples map
+                         # in a single wave. Matched with sge_extra in
+                         # 07_trax.smk: -pe sharedmem 16. Eddie nodes are 32-128
+                         # core; 16 slots is a small fraction, no queue risk.
   min_unique_cov: 3    # discard tRFs with < 3 uniquely-mapping reads (proposal 3.8)
 
 # ---------------------------------------------------------------------------
@@ -127,18 +135,91 @@ qc_thresholds:
   max_mirna_fraction:   0.20   # flag libraries with >20% miRNA reads
 
 # ---------------------------------------------------------------------------
-# Computational resources (override per rule where needed)
+# Computational resources — single source of truth for SGE memory/slot/
+# runtime tuning. Every value here is read by the corresponding rule via
+# the sge_extra() helper in the Snakefile. No .smk file should need
+# editing to fix an OOM kill, a wall-clock timeout, or to change how many
+# parallel SGE slots a rule requests — edit the values below instead.
+#
+# Per-rule fields:
+#   slots:        number of SGE "sharedmem" PE slots to request. Only set
+#                 above 1 when the rule's underlying tool genuinely
+#                 parallelises across multiple threads/processes (matches
+#                 the rule's own `threads:` value in that case). Omitted
+#                 (defaults to 1) for effectively single-threaded tools —
+#                 requesting unused slots only wastes cluster allocation.
+#   vmem_mb:      per-slot virtual memory limit (SGE h_vmem), in MB.
+#                 TOTAL memory budget granted to the job = slots * vmem_mb.
+#   runtime_min:  wall-clock time limit, in minutes.
+#
+# IMPORTANT: do not add `sge_pe: "sharedmem"` to any rule's resources block.
+# snakemake-executor-plugin-sge derives sge_pe's slot count from the OUTER
+# snakemake invocation's --cores value (not the rule's own threads:), and
+# the EDDIE profile is invoked with --cores 1 — so sge_pe silently
+# collapses every job to a single SGE slot regardless of how many
+# threads/processes it actually launches. This caused undiagnosed OOM
+# kills in trim_galore, bowtie2_pretRNA, and trax_quantify; mimtrnaseq and
+# build_bowtie2_pretRNA_index are pre-emptively fixed below for the same
+# reason, since both genuinely run multi-threaded tools. Always request
+# slots via "slots:" here instead — never sge_pe.
+#
+# NOTE: the previous version of this section had flat *_mem_mb keys
+# (trim_mem_mb, mim_mem_mb, bowtie2_mem_mb, cca_filter_mem_mb,
+# mirdeep2_mem_mb, trax_mem_mb, read_assignment_mem_mb) that were never
+# actually read by any rule — the .smk files had their own hardcoded
+# h_vmem literals instead, and several had drifted out of sync with these
+# unused config values (e.g. mim_mem_mb said 64000 while the rule actually
+# requested 8000M; trax_mem_mb said 16000 while the rule actually
+# requested 128000M total across 16 slots). The values below are pulled
+# from what the rules actually request today, not from the old stale keys.
+# default_threads / default_mem_mb are removed for the same reason — they
+# were never consumed anywhere either; the EDDIE profile's own
+# default-resources (set outside this file) already cover the fallback
+# case for any rule with no entry here.
 # ---------------------------------------------------------------------------
 resources:
-  default_threads: 4
-  default_mem_mb:  8000
-  trim_mem_mb:     16000
-  mim_mem_mb:      64000    # mim-tRNAseq is memory-intensive (GSNAP index)
-  bowtie2_mem_mb:  32000
-  cca_filter_mem_mb:       16000   # r2_dict (~1-2 GB) + BAM buffers; no unmapped lists (streamed)
-  mirdeep2_mem_mb:         8000   # mapper.pl + quantifier.pl + Bowtie1 index
-  trax_mem_mb:            16000   # TRAX processsamples.py across all cell-line BAMs
-  trax_runtime_min:        4320   # 72 h — tRAX maps+quantifies 15 samples per cell line;
-                                  # 24 h was insufficient (jobs hit wall clock at ~18.5 h
-                                  # mid-bowtie2). Raised from 1440. Uses igmm_long queue.
-  read_assignment_mem_mb:  2000   # pandas summary script; small TSV parsing only
+
+  build_bowtie2_pretRNA_index:
+    slots:        8       # matches bowtie2.threads — bowtie2-build is genuinely multi-threaded
+    vmem_mb:      4000
+    runtime_min:  60
+
+  trim_galore:
+    slots:        8       # matches trim_galore.cores — Trim Galore launches N parallel cutadapt/dnaio workers
+    vmem_mb:      4000
+    runtime_min:  120
+
+  fastqc_post_trim:
+    slots:        1       # FastQC runs on a single file per job; --threads has no effect here despite threads:2 in the rule
+    vmem_mb:      4000
+    runtime_min:  60
+
+  mimtrnaseq:
+    slots:        8       # matches mimtrnaseq.threads — GSNAP alignment (via mim-tRNAseq) is genuinely multi-threaded
+    vmem_mb:      8000
+    runtime_min:  480
+
+  cca_anticodon_filter:
+    slots:        1       # single-threaded pysam script (threads: 1 in the rule)
+    vmem_mb:      64000
+    runtime_min:  240
+
+  bowtie2_pretRNA:
+    slots:        8       # matches bowtie2.threads — bowtie2 -p N is genuinely multi-threaded
+    vmem_mb:      4000
+    runtime_min:  480
+
+  mirdeep2_pass3:
+    slots:        1       # mapper.pl / quantifier.pl are effectively single-threaded despite mirdeep2.threads
+    vmem_mb:      6000
+    runtime_min:  120
+
+  trax_quantify:
+    slots:        16      # matches trax.threads — TRAX maps this many samples concurrently
+    vmem_mb:      8000
+    runtime_min:  4320    # 72h — tRAX maps+quantifies 15 samples per cell line; was config["resources"]["trax_runtime_min"]
+
+  build_read_assignment_summary:
+    slots:        1
+    vmem_mb:      2000
+    runtime_min:  30

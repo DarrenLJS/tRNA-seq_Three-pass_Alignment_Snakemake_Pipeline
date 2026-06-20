@@ -22,9 +22,14 @@ rule fastqc_post_trim:
         f"{SCRATCH}/benchmarks/02_fastqc_post_trim/{{sample}}_{{read}}.tsv",
     threads: 2
     resources:
-        sge_pe    = "sharedmem",
-        runtime   = 60,
-        sge_extra = "-V -l h_vmem=4000M"
+        # FIX (config tidy-up): dropped sge_pe — it collapses to 1 SGE
+        # slot under the EDDIE profile's --cores 1 regardless of
+        # threads:, so it was already effectively requesting 1 slot.
+        # FastQC also runs on a single input file per job here (not a
+        # batch), so --threads 2 has no real parallel benefit to lose by
+        # making that 1-slot allocation explicit instead of misleading.
+        runtime   = config["resources"]["fastqc_post_trim"]["runtime_min"],
+        sge_extra = sge_extra("fastqc_post_trim"),
     conda:
         "../../envs/environment.yaml"
     shell:

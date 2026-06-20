@@ -83,7 +83,7 @@ rule build_read_assignment_summary:
     conda:
         "../../envs/environment.yaml"
     resources:
-        runtime   = 30,
-        sge_extra = "-V -l h_vmem=2000M"
+        runtime   = config["resources"]["build_read_assignment_summary"]["runtime_min"],
+        sge_extra = sge_extra("build_read_assignment_summary"),
     script:
         "../scripts/build_read_assignment_summary.py"

@@ -58,14 +58,17 @@ rule mirdeep2_pass3:
         f"{SCRATCH}/benchmarks/06_pass3_mirna/{{sample}}.tsv",
     threads: lambda wildcards: MD2["threads"]
     resources:
-        sge_pe    = "sharedmem",
-        runtime   = 120,
-        # FIX: was 2000M — Bowtie1 mapping against hg38 peaked at 2.54G vmem,
-        # exceeding the 2G limit and triggering an SGE OOM kill (exit 137,
-        # failed 46). Raised to 6000M to give comfortable headroom.
-        # mapper.pl and quantifier.pl are effectively single-threaded so
-        # 1 slot is sufficient; only memory needed to be increased.
-        sge_extra = "-V -l h_vmem=6000M"
+        # FIX (config tidy-up): dropped sge_pe — it collapses to 1 SGE
+        # slot under the EDDIE profile's --cores 1 regardless of
+        # threads:, which was already the correct allocation here since
+        # mapper.pl and quantifier.pl are effectively single-threaded
+        # (mirdeep2.threads is unused by either tool). Memory was the
+        # real fix needed (was 2000M — Bowtie1 mapping against hg38
+        # peaked at 2.54G vmem, exceeding the 2G limit and triggering an
+        # SGE OOM kill, exit 137, failed 46 — raised to 6000M).
+        # Vmem/runtime now live in config["resources"]["mirdeep2_pass3"].
+        runtime   = config["resources"]["mirdeep2_pass3"]["runtime_min"],
+        sge_extra = sge_extra("mirdeep2_pass3"),
     conda:
         "../../envs/environment.yaml"
     shell:

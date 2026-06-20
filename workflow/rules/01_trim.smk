@@ -72,9 +72,20 @@ rule trim_galore:
     threads: lambda wildcards: TG["cores"]
     resources:
         tmpdir    = f"{SCRATCH}/tmp",
-        sge_pe    = "sharedmem",
-        runtime   = 120,
-        sge_extra = "-V -l h_vmem=2000M"
+        # FIX: sge_pe derives its slot count from `threads`, which the SGE
+        # executor plugin reads from the OUTER snakemake invocation's
+        # --cores value (not the rule's own threads:). Since the EDDIE
+        # profile is invoked with --cores 1, sge_pe collapsed every
+        # trim_galore job down to a 1-slot allocation while Trim Galore
+        # itself still launched --cores 8 parallel cutadapt workers inside
+        # it — blowing past the 1-slot h_vmem=2000M ceiling and getting
+        # silently OOM-killed before any application-level error could be
+        # logged. sge_extra("trim_galore") hardcodes "-pe sharedmem N"
+        # directly (as in bowtie2_pretRNA / trax_quantify), bypassing that
+        # thread-derived slot count entirely. Slots/vmem/runtime now live
+        # in config["resources"]["trim_galore"] — adjust there, not here.
+        runtime   = config["resources"]["trim_galore"]["runtime_min"],
+        sge_extra = sge_extra("trim_galore"),
     conda:
         "../../envs/environment.yaml"
     shell:

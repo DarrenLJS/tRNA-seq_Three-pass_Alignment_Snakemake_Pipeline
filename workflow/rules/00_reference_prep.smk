@@ -179,9 +179,16 @@ rule build_bowtie2_pretRNA_index:
         f"{SCRATCH}/benchmarks/00_build_bowtie2_pretRNA_index.tsv",
     threads: lambda wildcards: config["bowtie2"]["threads"]
     resources:
-        sge_pe    = "sharedmem",
-        runtime   = 60,
-        sge_extra = "-V -l h_vmem=4000M"
+        # FIX (config tidy-up): was sge_pe="sharedmem" + a hardcoded
+        # "-V -l h_vmem=4000M" literal. sge_pe collapses to 1 SGE slot
+        # under the EDDIE profile's --cores 1 regardless of threads:,
+        # while bowtie2-build --threads 8 genuinely uses 8 threads — same
+        # class of bug fixed in trim_galore/bowtie2_pretRNA/trax_quantify.
+        # Hadn't caused a visible failure yet because the pre-tRNA-only
+        # reference is small enough to fit in one slot's vmem, but is
+        # fixed here for consistency rather than left as a latent risk.
+        runtime   = config["resources"]["build_bowtie2_pretRNA_index"]["runtime_min"],
+        sge_extra = sge_extra("build_bowtie2_pretRNA_index"),
     conda:
         "../../envs/environment.yaml"
     shell:

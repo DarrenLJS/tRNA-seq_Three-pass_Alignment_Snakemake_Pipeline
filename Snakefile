@@ -59,6 +59,49 @@ configfile: "config/config_eddie.yaml"
 SCRATCH = config["scratch"]
 
 # ---------------------------------------------------------------------------
+# SGE resource helper
+#
+# Single place that assembles the SGE `sge_extra` flag string for a rule.
+# Every per-rule resources: block should read:
+#     sge_extra = sge_extra("rule_name")
+# instead of a hand-written "-V -pe sharedmem N -l h_vmem=XM" literal, so
+# that fixing an OOM kill or under-provisioning only ever requires editing
+# config["resources"][rule_name] in config_eddie.yaml — never a .smk file.
+# ---------------------------------------------------------------------------
+def sge_extra(rule_name):
+    """
+    Build the `sge_extra` SGE resource string for `rule_name` from its
+    entry in config["resources"].
+
+    config["resources"][rule_name] must provide:
+        vmem_mb: per-slot virtual memory limit, in MB (SGE h_vmem).
+        slots:   (optional, default 1) number of "sharedmem" PE slots to
+                 request. Only set above 1 when the rule's underlying tool
+                 genuinely parallelises across multiple threads/processes
+                 (it should match the rule's own `threads:` value in that
+                 case). Total memory budget granted to the job is
+                 slots * vmem_mb, since h_vmem is a PER-SLOT SGE limit.
+
+    Do NOT also set resources.sge_pe on a rule that uses this helper.
+    snakemake-executor-plugin-sge derives sge_pe's slot count from the
+    OUTER snakemake invocation's --cores value, not the rule's own
+    threads: — and the EDDIE profile is invoked with --cores 1, so
+    sge_pe silently collapses every job to a single SGE slot regardless
+    of how many threads/processes it actually launches. That caused
+    undiagnosed OOM kills in trim_galore, bowtie2_pretRNA, and
+    trax_quantify (see FIX comments in their rule files) before being
+    fixed by hardcoding "-pe sharedmem N" directly into sge_extra, which
+    the executor plugin cannot override. This helper does that
+    hardcoding for every rule, sourced from config instead of a literal.
+    """
+    r     = config["resources"][rule_name]
+    slots = r.get("slots", 1)
+    vmem  = r["vmem_mb"]
+    pe    = f" -pe sharedmem {slots}" if slots > 1 else ""
+    return f"-V{pe} -l h_vmem={vmem}M"
+
+
+# ---------------------------------------------------------------------------
 # Load sample manifest
 # ---------------------------------------------------------------------------
 manifest = (

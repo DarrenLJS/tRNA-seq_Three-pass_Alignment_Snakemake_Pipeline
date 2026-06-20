@@ -59,8 +59,8 @@ rule cca_anticodon_filter:
         f"{SCRATCH}/benchmarks/04_pass1_filters/{{sample}}.tsv",
     threads: 1
     resources:
-        runtime   = 240,
-        sge_extra = "-V -l h_vmem=64000M"
+        runtime   = config["resources"]["cca_anticodon_filter"]["runtime_min"],
+        sge_extra = sge_extra("cca_anticodon_filter"),
     conda:
         "../../envs/environment.yaml"
     script:
