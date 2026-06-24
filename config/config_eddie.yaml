@@ -191,12 +191,12 @@ resources:
 
   fastqc_post_trim:
     slots:        1       # FastQC runs on a single file per job; --threads has no effect here despite threads:2 in the rule
-    vmem_mb:      4000
+    vmem_mb:      6000
     runtime_min:  60
 
   mimtrnaseq:
     slots:        8       # matches mimtrnaseq.threads — GSNAP alignment (via mim-tRNAseq) is genuinely multi-threaded
-    vmem_mb:      8000
+    vmem_mb:      16000
     runtime_min:  480
 
   cca_anticodon_filter:
