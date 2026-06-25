@@ -152,7 +152,7 @@ include: "workflow/rules/04_pass1_filters.smk"
 include: "workflow/rules/05_pass2_pretRNA.smk"
 include: "workflow/rules/06_pass3_mirna.smk"
 include: "workflow/rules/07_trax.smk"
-include: "workflow/rules/08_deseq2_prep.smk"
+include: "workflow/rules/08_data_prep.smk"
 
 # ---------------------------------------------------------------------------
 # Target rule  —  requesting all final outputs drives the entire DAG
@@ -168,6 +168,12 @@ rule all:
         # ── Pass 1: mim-tRNAseq isodecoder count tables ──────────────────
         expand(
             "{scratch}/pass1_mimtrnaseq/{cell_line}/counts/Isodecoder_counts.txt",
+            scratch=SCRATCH,
+            cell_line=CELL_LINES,
+        ),
+        # ── Pass 1: per-cell-line mismatch data (wobble-mod QC + rule 09) ─
+        expand(
+            "{scratch}/pass1_mimtrnaseq/{cell_line}/mismatch",
             scratch=SCRATCH,
             cell_line=CELL_LINES,
         ),
@@ -208,6 +214,17 @@ rule all:
         ),
         expand(
             "{scratch}/deseq2_input/{cell_line}/coldata.tsv",
+            scratch=SCRATCH,
+            cell_line=CELL_LINES,
+        ),
+        # ── Binomial GLM inputs: wobble-position 34 mismatch matrices ────
+        expand(
+            "{scratch}/deseq2_input/{cell_line}/pos34_coverage_matrix.tsv",
+            scratch=SCRATCH,
+            cell_line=CELL_LINES,
+        ),
+        expand(
+            "{scratch}/deseq2_input/{cell_line}/pos34_mismatch_matrix.tsv",
             scratch=SCRATCH,
             cell_line=CELL_LINES,
         ),

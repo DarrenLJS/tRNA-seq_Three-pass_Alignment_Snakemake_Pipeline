@@ -75,7 +75,7 @@ rule mimtrnaseq:
         iso_counts    = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/counts/Isodecoder_counts.txt",
         isoa_counts   = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/counts/Isoacceptor_counts.txt",
         align_done    = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/.align_done",
-        mismatch_done = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/.mismatch_done",
+        mismatch_dir  = directory(f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/mismatch"),
     params:
         outdir       = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}",
         # mimseq writes here; must not pre-exist (Snakemake creates outdir above)
@@ -175,12 +175,18 @@ rule mimtrnaseq:
         rm -rf "{params.outdir}/align"
         mv "{params.mimseq_dir}/align" "{params.outdir}/align"
 
+        # Move mismatch/ to {params.outdir}/mismatch/ — per-position
+        # misincorporation data for wobble-position 34 modification QC
+        # and future Binomial GLM inference (rule 09).
+        echo "[$(date)] Moving mismatch directory..." >> {log}
+        rm -rf "{params.outdir}/mismatch"
+        mv "{params.mimseq_dir}/mismatch" "{params.outdir}/mismatch"
+
         # ── Verify and create sentinel files ─────────────────────────────
         N_BAMS=$(find "{params.outdir}/align/" -name "*.bam" | wc -l)
         echo "[$(date)] Found $N_BAMS BAM files in {params.outdir}/align/" >> {log}
 
         touch {output.align_done}
-        touch {output.mismatch_done}
         echo "[$(date)] mim-tRNAseq complete for {wildcards.cell_line}." >> {log}
         """
 

@@ -1,15 +1,16 @@
 # =============================================================================
-# workflow/rules/08_deseq2_prep.smk
+# workflow/rules/08_data_prep.smk
 # Collate mim-tRNAseq count tables into per-cell-line count matrices and
 # write the corresponding coldata (sample metadata) TSVs for DESeq2/edgeR.
-#
-# Also assembles a per-cell-line read assignment summary (QC metric 2 from
-# the proposal: proportional read assignment across all categories).
+# Also assembles wobble-position mismatch matrices for the Binomial GLM
+# (future rule 09) and a per-cell-line read assignment summary (QC).
 #
 # Outputs per cell line:
 #   isodecoder_counts_matrix.tsv   — rows=isodecoders, cols=samples
 #   isoacceptor_counts_matrix.tsv  — rows=isoacceptors, cols=samples
 #   coldata.tsv                    — sample metadata for DESeq2
+#   pos34_coverage_matrix.tsv      — wobble-pos coverage (GLM trials)
+#   pos34_mismatch_matrix.tsv      — wobble-pos mismatch count (GLM successes)
 #   read_assignment_summary.tsv    — read proportions per sample (QC)
 # =============================================================================
 
@@ -72,12 +73,19 @@ rule build_read_assignment_summary:
             f"{SCRATCH}/pass3_mirna/{s}/{s}_miRNA_fraction.tsv"
             for s in samples_for(wildcards.cell_line)
         ],
+        # Per-position misincorporation data from mim-tRNAseq (rule 03).
+        # Used to compute wobble-position 34 coverage QC columns:
+        #   n_isodecoders_pos34_covered, median_pos34_coverage, flag_low_mismatch_cov.
+        mismatch_dir  = lambda wildcards: (
+            f"{SCRATCH}/pass1_mimtrnaseq/{wildcards.cell_line}/mismatch"
+        ),
     output:
         summary = f"{SCRATCH}/qc/read_assignment/{{cell_line}}_read_assignment_summary.tsv",
     params:
-        cell_line = "{cell_line}",
-        scratch   = SCRATCH,
-        qc_thresh = config["qc_thresholds"],
+        cell_line     = "{cell_line}",
+        scratch       = SCRATCH,
+        qc_thresh     = config["qc_thresholds"],
+        min_pos34_cov = config["qc_thresholds"]["min_pos34_coverage"],
     log:
         f"{SCRATCH}/logs/08_read_assignment/{{cell_line}}.log",
     conda:
@@ -87,3 +95,37 @@ rule build_read_assignment_summary:
         sge_extra = sge_extra("build_read_assignment_summary"),
     script:
         "../scripts/build_read_assignment_summary.py"
+
+
+rule build_mismatch_matrices:
+    """
+    Assemble per-cell-line wobble-position (34) mismatch matrices for
+    the Binomial GLM wobble-modification inference (future rule 09).
+
+    Directly analogous to build_deseq2_inputs for count matrices:
+        mismatch/ → pos34_coverage_matrix.tsv  (trials: read depth at pos 34)
+                  → pos34_mismatch_matrix.tsv   (successes: mismatch count at pos 34)
+
+    Both matrices: rows = isodecoder clusters, cols = samples (manifest order).
+    If mim-tRNAseq stores proportions rather than raw counts, collate_mismatch.py
+    recovers counts as round(proportion * coverage).
+
+    Calls workflow/scripts/collate_mismatch.py.
+    """
+    input:
+        mismatch_dir = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/mismatch",
+    output:
+        cov_matrix = f"{SCRATCH}/deseq2_input/{{cell_line}}/pos34_coverage_matrix.tsv",
+        mm_matrix  = f"{SCRATCH}/deseq2_input/{{cell_line}}/pos34_mismatch_matrix.tsv",
+    params:
+        outdir    = f"{SCRATCH}/deseq2_input/{{cell_line}}",
+        cell_line = "{cell_line}",
+        manifest  = config["manifest"],
+    log:
+        f"{SCRATCH}/logs/08_mismatch_matrices/{{cell_line}}.log",
+    resources:
+        runtime = 30,
+    conda:
+        "../../envs/environment.yaml"
+    script:
+        "../scripts/collate_mismatch.py"

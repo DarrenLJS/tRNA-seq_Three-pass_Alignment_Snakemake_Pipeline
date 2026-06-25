@@ -72,11 +72,14 @@ references:
 # Trim Galore parameters
 # ---------------------------------------------------------------------------
 trim_galore:
-  # Adapter sequences confirmed from MultiQC report:
-  #   R1: Illumina Universal Adapter
-  #   R2: Illumina Small RNA 3-prime Adapter
+  # Adapter sequences confirmed by direct inspection of raw R2 reads (cutadapt v5.2):
+  #   R1: Illumina Universal / P7-side adapter (AGATCGGAAGAGC) — confirmed trimming R1 correctly
+  #   R2: RC of Small RNA RA5 5-prime adapter (GATCGTCGGACTGTAGAACTCTGAAC) — confirmed present
+  #       in R2 reads at the 3-prime end; replaces the previous incorrect value
+  #       (TGGAATTCTCGGGTGCCAAGG / RA3) which was the R2 5-prime adapter and
+  #       therefore untrimmable by Trim Galore's 3-prime-only adapter2 mode.
   adapter_r1:   "AGATCGGAAGAGC"
-  adapter_r2:   "TGGAATTCTCGGGTGCCAAGG"
+  adapter_r2:   "GATCGTCGGACTGTAGAACTCTGAAC"
   min_length:   12      # retain tRFs (minimum 12 nt)
   quality:      20      # Phred Q20 5-prime quality trimming
   cores:        8       # cutadapt threads per sample
@@ -133,6 +136,7 @@ qc_thresholds:
   min_cca_concordance:  0.70   # target ≥70% of Pass 1 reads passing CCA filter
   min_replicate_r:      0.95   # Pearson r target within condition groups
   max_mirna_fraction:   0.20   # flag libraries with >20% miRNA reads
+  min_pos34_coverage:   10     # min median read depth at wobble position 34; below → flag_low_mismatch_cov=WARN
 
 # ---------------------------------------------------------------------------
 # Computational resources — single source of truth for SGE memory/slot/

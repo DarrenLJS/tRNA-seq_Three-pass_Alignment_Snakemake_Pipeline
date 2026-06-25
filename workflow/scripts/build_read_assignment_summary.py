@@ -1,4 +1,4 @@
-import pandas as pd, os, re, logging
+import pandas as pd, os, re, glob, logging
 
 logging.basicConfig(filename=snakemake.log[0], level=logging.INFO,
                     format="%(asctime)s %(message)s")
@@ -15,6 +15,105 @@ cl_samples = [
 scratch   = snakemake.params.scratch
 cell_line = snakemake.params.cell_line
 thresh    = snakemake.params.qc_thresh
+min_pos34_cov = snakemake.params.min_pos34_cov
+
+# ---------------------------------------------------------------------------
+# Parse mismatch/ directory once for the whole cell line.
+# mim-tRNAseq writes per-position misincorporation data here (rule 03).
+# We extract position-34 (wobble) coverage per sample as a QC check:
+# sufficient depth at this position is a prerequisite for the Binomial GLM
+# wobble-modification inference planned for rule 09.
+#
+# Expected file: one or more TSVs inside mismatch/ containing at minimum:
+#   pos    — canonical tRNA position (1-based; 34 = wobble)
+#   cov    — read coverage at this position
+#   <id>   — sample identifier column (sample / id / library / name)
+#
+# NOTE: if the mismatch file format from your mimseq version differs, adjust
+# the column name detection in parse_mismatch_coverage() below.
+# ---------------------------------------------------------------------------
+def parse_mismatch_coverage(mismatch_dir, cl_samples):
+    """
+    Return dict: sample_id -> {n_isodecoders_pos34_covered, median_pos34_coverage}.
+    Returns empty dict on any parse failure; caller fills columns with None.
+    """
+    candidates = (
+        glob.glob(os.path.join(mismatch_dir, "*mismatch*.txt")) +
+        glob.glob(os.path.join(mismatch_dir, "*.txt"))
+    )
+    # Deduplicate while preserving order (mismatch-named files first)
+    seen = set()
+    candidates = [p for p in candidates if not (p in seen or seen.add(p))]
+
+    if not candidates:
+        logger.warning(f"No files found in mismatch dir: {mismatch_dir}")
+        return {}
+
+    for fpath in candidates:
+        try:
+            df = pd.read_csv(fpath, sep="\t")
+            df.columns = [c.lower().strip() for c in df.columns]
+
+            if not {"pos", "cov"}.issubset(df.columns):
+                logger.info(
+                    f"Skipping {os.path.basename(fpath)}: missing pos/cov columns "
+                    f"(found: {list(df.columns)})"
+                )
+                continue
+
+            # Identify the sample-label column (name varies across mimseq versions)
+            sample_col = next(
+                (c for c in df.columns if c in ("sample", "id", "library", "name")),
+                None
+            )
+            if sample_col is None:
+                logger.info(
+                    f"Skipping {os.path.basename(fpath)}: no sample identifier column "
+                    f"(found: {list(df.columns)})"
+                )
+                continue
+
+            pos34 = df[df["pos"] == 34].copy()
+            if pos34.empty:
+                logger.warning(f"No position-34 rows in {os.path.basename(fpath)}")
+                continue
+
+            logger.info(
+                f"Parsed mismatch data from {os.path.basename(fpath)}: "
+                f"{len(pos34)} position-34 rows across "
+                f"{pos34[sample_col].nunique()} distinct sample labels"
+            )
+
+            result = {}
+            for s in cl_samples:
+                # mim-tRNAseq labels may retain _val_1 suffix; match if our
+                # sample_id is equal to or a prefix of the label in the file.
+                mask = pos34[sample_col].apply(
+                    lambda x: str(x) == s or str(x).startswith(s)
+                )
+                s_df = pos34[mask]
+                if s_df.empty:
+                    logger.warning(f"No position-34 data found for sample {s}")
+                    result[s] = {"n_isodecoders_pos34_covered": 0,
+                                 "median_pos34_coverage":       0.0}
+                else:
+                    result[s] = {
+                        "n_isodecoders_pos34_covered": int(len(s_df)),
+                        "median_pos34_coverage":       round(float(s_df["cov"].median()), 1),
+                    }
+            return result
+
+        except Exception as e:
+            logger.warning(f"Could not parse {os.path.basename(fpath)}: {e}")
+            continue
+
+    logger.warning(f"Could not parse any mismatch file in {mismatch_dir}")
+    return {}
+
+
+mismatch_stats = parse_mismatch_coverage(
+    snakemake.input.mismatch_dir, cl_samples
+)
 
 for s in cl_samples:
     row = {"sample": s, "cell_line": cell_line}
@@ -73,6 +172,15 @@ for s in cl_samples:
                   "pass3_total_unmapped","pass3_unassigned"]:
             row[k] = None
 
+    # ---- Wobble-position 34 mismatch coverage --------------------------------
+    mm = mismatch_stats.get(s)
+    if mm is not None:
+        row["n_isodecoders_pos34_covered"] = mm["n_isodecoders_pos34_covered"]
+        row["median_pos34_coverage"]       = mm["median_pos34_coverage"]
+    else:
+        row["n_isodecoders_pos34_covered"] = None
+        row["median_pos34_coverage"]       = None
+
     # ---- QC flags ------------------------------------------------------------
     row["flag_low_cca"] = (
         "WARN" if (row.get("pass1_functional_rate") or 1) < thresh["min_cca_concordance"]
@@ -82,11 +190,16 @@ for s in cl_samples:
         "WARN" if (row.get("pass3_mirna_fraction") or 0) > thresh["max_mirna_fraction"]
         else "OK"
     )
+    med_cov = row.get("median_pos34_coverage")
+    row["flag_low_mismatch_cov"] = (
+        "WARN" if (med_cov is None or med_cov < min_pos34_cov) else "OK"
+    )
 
     rows.append(row)
 
 df = pd.DataFrame(rows)
 df.to_csv(snakemake.output.summary, sep="\t", index=False)
 logger.info(f"Written read assignment summary to {snakemake.output.summary}")
-logger.info(f"Samples with low CCA rate: {(df['flag_low_cca']=='WARN').sum()}")
-logger.info(f"Samples with high miRNA fraction: {(df['flag_high_mirna']=='WARN').sum()}")
+logger.info(f"Samples with low CCA rate:           {(df['flag_low_cca']=='WARN').sum()}")
+logger.info(f"Samples with high miRNA fraction:    {(df['flag_high_mirna']=='WARN').sum()}")
+logger.info(f"Samples with low pos-34 mismatch cov:{(df['flag_low_mismatch_cov']=='WARN').sum()}")
