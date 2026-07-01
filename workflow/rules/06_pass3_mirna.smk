@@ -125,8 +125,15 @@ rule mirdeep2_pass3:
             >> {log} 2>&1
 
         # Move output to expected location
-        if [ -f "miRNAs_expressed_{params.sample}.csv" ]; then
-            mv "miRNAs_expressed_{params.sample}.csv" {output.counts}
+        # FIX: quantifier.pl (invoked with -y {params.sample}) names its real
+        # output "miRNAs_expressed_all_samples_{sample}.csv", NOT
+        # "miRNAs_expressed_{sample}.csv". The old check here always missed,
+        # silently falling into the else branch and writing a header-only
+        # counts file for every sample -- masking substantial real miRNA
+        # signal (e.g. A549_c2_1 has 1,027 expressed miRNAs / ~13.9M reads
+        # in the real output, all zeroed out downstream by this bug).
+        if [ -f "miRNAs_expressed_all_samples_{params.sample}.csv" ]; then
+            mv "miRNAs_expressed_all_samples_{params.sample}.csv" {output.counts}
         else
             echo "WARNING: miRDeep2 quantifier output not found." >> {log}
             echo -e "#miRNA\tread_count\tnorm_count" > {output.counts}

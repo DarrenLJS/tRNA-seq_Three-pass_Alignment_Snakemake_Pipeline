@@ -218,10 +218,24 @@ resources:
     vmem_mb:      6000
     runtime_min:  120
 
+  trax_map_sample:
+    slots:        1       # bowtie2 is hardcoded -p 1 by TRAX — genuinely single-threaded
+    vmem_mb:      8000    # generous for one sample's bowtie2 + choosemappings.py
+    runtime_min:  4320    # 72h per sample — same budget as old monolithic job but now
+                          # per-sample, so even the heaviest THP1 p8 samples (300M reads,
+                          # ~55h bowtie2 observed) fit within the wall-clock limit.
+                          # FIX 10 (2026-06-29): split from trax_quantify to give each
+                          # sample its own SGE job and independent 72h budget.
+
   trax_quantify:
-    slots:        16      # matches trax.threads — TRAX maps this many samples concurrently
+    slots:        8       # FIX 10: analysis-only phase (--lazyremap, no mapping).
+                          # 8 cores for TRAX's counting + R analysis steps.
+                          # Reduced from 16 (mapping wave parallelism no longer needed
+                          # here — that's handled per-sample by trax_map_sample).
+                          # 8 slots × 8000M = 64G total RSS budget.
     vmem_mb:      8000
-    runtime_min:  4320    # 72h — tRAX maps+quantifies 15 samples per cell line; was config["resources"]["trax_runtime_min"]
+    runtime_min:  480     # 8h — analysis-only; observed < 2h for A549 (vs 23h total
+                          # including mapping). FIX 10: was 4320 min (72h monolithic).
 
   build_read_assignment_summary:
     slots:        1

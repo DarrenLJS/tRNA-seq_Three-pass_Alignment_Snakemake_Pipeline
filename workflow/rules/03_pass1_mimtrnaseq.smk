@@ -180,7 +180,7 @@ rule mimtrnaseq:
         # and future Binomial GLM inference (rule 09).
         echo "[$(date)] Moving mismatch directory..." >> {log}
         rm -rf "{params.outdir}/mismatch"
-        mv "{params.mimseq_dir}/mismatch" "{params.outdir}/mismatch"
+        mv "{params.mimseq_dir}/mods" "{params.outdir}/mismatch"
 
         # ── Verify and create sentinel files ─────────────────────────────
         N_BAMS=$(find "{params.outdir}/align/" -name "*.bam" | wc -l)
