@@ -221,11 +221,15 @@ resources:
   trax_map_sample:
     slots:        1       # bowtie2 is hardcoded -p 1 by TRAX — genuinely single-threaded
     vmem_mb:      8000    # generous for one sample's bowtie2 + choosemappings.py
-    runtime_min:  4320    # 72h per sample — same budget as old monolithic job but now
-                          # per-sample, so even the heaviest THP1 p8 samples (300M reads,
-                          # ~55h bowtie2 observed) fit within the wall-clock limit.
+    runtime_min:  8640    # 6 days per sample. Raised from 4320 (72h) on 2026-07-02:
+                          # 7 THP1 samples (c2_2, c4_1, c4_2, p2_3, p4_1, p4_2, p4_3)
+                          # hit the 72h wall mid-bowtie2 with no error output — SGE
+                          # walltime kill, not a script failure. THP1_c2_2 alone had
+                          # 257,930,880 reads (~258M), confirming the original "300M
+                          # reads / ~55h" estimate in FIX 10 was optimistic for
+                          # -k 100 --very-sensitive at single-threaded (-p 1).
                           # FIX 10 (2026-06-29): split from trax_quantify to give each
-                          # sample its own SGE job and independent 72h budget.
+                          # sample its own SGE job and independent wall-clock budget.
 
   trax_quantify:
     slots:        8       # FIX 10: analysis-only phase (--lazyremap, no mapping).

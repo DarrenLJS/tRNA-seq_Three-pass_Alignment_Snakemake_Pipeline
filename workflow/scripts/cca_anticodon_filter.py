@@ -35,6 +35,24 @@ New three-pass strategy:
       • name in mapped_names  → TGG/NGG CCA check on R2 → add to cca_pass
       • name not in mapped_names → write to unmapped_r1 / unmapped_r2
   Pass 3 (BAM scan)     — CCA + anticodon filter → write filtered_bam.
+
+FIX (2026-07-02) — independent filter accounting:
+    Pass 3 previously short-circuited: a CCA failure skipped the anticodon
+    check entirely via `continue`, so `anticodon_fail` only ever meant
+    "passed CCA, failed anticodon" and there was no way to tell "failed
+    CCA only" apart from "failed both filters". Both checks now run on
+    every read unconditionally, giving four independent buckets:
+        both_pass            — passed CCA AND anticodon (written to output)
+        fail_cca_only        — failed CCA, would have passed anticodon
+        fail_anticodon_only  — passed CCA, failed anticodon
+        fail_both            — failed both filters
+    This also fixes a mislabeling bug where filter_stats.tsv's
+    "anticodon_pass" column was silently set to bam_counters["both_pass"]
+    (a duplicate of both_pass) instead of the true anticodon-pass count.
+    filter_stats.tsv's schema is NOT identical to the original as a
+    result — see the Pass 3 / stats_rows sections below for the new
+    columns (fail_cca_only, fail_anticodon_only, fail_both) and the
+    corrected anticodon_pass values.
 """
 
 import pysam
@@ -241,30 +259,52 @@ if fastq_counters["name_mismatch"] > 0:
 # anticodon concordance check.
 # ---------------------------------------------------------------------------
 bam_counters = {
-    "total_aligned"  : 0,
-    "cca_fail"       : 0,
-    "anticodon_fail" : 0,
-    "both_pass"      : 0,
+    "total_aligned"      : 0,
+    "cca_pass"           : 0,
+    "cca_fail"           : 0,
+    "anticodon_pass"     : 0,
+    "anticodon_fail"     : 0,
+    "fail_cca_only"      : 0,   # failed CCA, would have passed anticodon
+    "fail_anticodon_only": 0,   # passed CCA, failed anticodon
+    "fail_both"          : 0,   # failed both filters
+    "both_pass"          : 0,   # passed both filters (written to output BAM)
 }
 
 bam_in  = pysam.AlignmentFile(bam_path, "rb")
 out_bam = pysam.AlignmentFile(filtered_bam, "wb", header=bam_in.header)
 
-logger.info("Pass 3: filtering BAM reads (CCA + anticodon)...")
+logger.info("Pass 3: filtering BAM reads (CCA + anticodon, checked independently)...")
 
 for read in bam_in:
     bam_counters["total_aligned"] += 1
 
-    if read.query_name not in cca_pass:
+    # FIX (read-count reporting): both checks now run unconditionally on
+    # every read, rather than short-circuiting after a CCA failure. This
+    # is required to distinguish "failed CCA only" from "failed both
+    # filters" — the previous version could not tell these apart, since
+    # a CCA failure skipped the anticodon check entirely.
+    cca_ok       = read.query_name in cca_pass
+    anticodon_ok = is_anticodon_concordant(read)
+
+    if cca_ok:
+        bam_counters["cca_pass"] += 1
+    else:
         bam_counters["cca_fail"] += 1
-        continue
 
-    if not is_anticodon_concordant(read):
+    if anticodon_ok:
+        bam_counters["anticodon_pass"] += 1
+    else:
         bam_counters["anticodon_fail"] += 1
-        continue
 
-    bam_counters["both_pass"] += 1
-    out_bam.write(read)
+    if cca_ok and anticodon_ok:
+        bam_counters["both_pass"] += 1
+        out_bam.write(read)
+    elif cca_ok and not anticodon_ok:
+        bam_counters["fail_anticodon_only"] += 1
+    elif not cca_ok and anticodon_ok:
+        bam_counters["fail_cca_only"] += 1
+    else:
+        bam_counters["fail_both"] += 1
 
 bam_in.close()
 out_bam.close()
@@ -272,8 +312,11 @@ out_bam.close()
 logger.info(
     f"Pass 3 complete: "
     f"total_aligned={bam_counters['total_aligned']:,}, "
-    f"cca_fail={bam_counters['cca_fail']:,}, "
-    f"anticodon_fail={bam_counters['anticodon_fail']:,}, "
+    f"cca_pass={bam_counters['cca_pass']:,}, cca_fail={bam_counters['cca_fail']:,}, "
+    f"anticodon_pass={bam_counters['anticodon_pass']:,}, anticodon_fail={bam_counters['anticodon_fail']:,}, "
+    f"fail_cca_only={bam_counters['fail_cca_only']:,}, "
+    f"fail_anticodon_only={bam_counters['fail_anticodon_only']:,}, "
+    f"fail_both={bam_counters['fail_both']:,}, "
     f"both_pass={bam_counters['both_pass']:,}"
 )
 
@@ -287,7 +330,10 @@ os.rename(sorted_tmp, filtered_bam)
 pysam.index(filtered_bam)
 
 # ---------------------------------------------------------------------------
-# Write filter statistics (schema identical to original)
+# Write filter statistics (schema CHANGED from original — see FIX 2026-07-02
+# in the module docstring: new fail_cca_only/fail_anticodon_only/fail_both
+# columns, and anticodon_pass is now the true anticodon-pass count rather
+# than a duplicate of both_pass)
 # ---------------------------------------------------------------------------
 total_al        = bam_counters["total_aligned"]
 functional_rate = bam_counters["both_pass"] / total_al if total_al > 0 else 0.0
@@ -296,19 +342,30 @@ cca_rate        = (
 )
 
 stats_rows = {
-    "sample"         : sample_id,
-    "total_pairs"    : fastq_counters["total_input"],
-    "both_unmapped"  : fastq_counters["unmapped_written"],
-    "both_mapped"    : fastq_counters["mapped_seen"],
-    "total_aligned"  : total_al,
-    "cca_pass"       : fastq_counters["cca_pass"],
-    "cca_fail"       : fastq_counters["cca_fail"],
-    "anticodon_pass" : bam_counters["both_pass"],
-    "anticodon_fail" : bam_counters["anticodon_fail"],
-    "both_pass"      : bam_counters["both_pass"],
-    "cca_pass_rate"  : round(cca_rate, 4),
-    "functional_rate": round(functional_rate, 4),
-    "unmapped"       : fastq_counters["unmapped_written"],
+    "sample"              : sample_id,
+    "total_pairs"         : fastq_counters["total_input"],
+    "both_unmapped"       : fastq_counters["unmapped_written"],
+    "both_mapped"         : fastq_counters["mapped_seen"],
+    "total_aligned"       : total_al,
+    # FIX (read-count reporting): cca_pass/cca_fail below are BAM-level
+    # (from Pass 3, one row per alignment) rather than the Pass 2
+    # read-name-level counts, since total_aligned/functional_rate are
+    # also BAM-level. These can differ from fastq_counters["cca_pass"]/
+    # ["cca_fail"] when a read name has multiple alignments.
+    "cca_pass"            : bam_counters["cca_pass"],
+    "cca_fail"            : bam_counters["cca_fail"],
+    # FIX: previously mislabeled — this column held bam_counters["both_pass"]
+    # (i.e. it duplicated "both_pass"), not the true anticodon-pass count.
+    "anticodon_pass"      : bam_counters["anticodon_pass"],
+    "anticodon_fail"      : bam_counters["anticodon_fail"],
+    # New: independent breakdown of why a read failed to reach both_pass.
+    "fail_cca_only"       : bam_counters["fail_cca_only"],
+    "fail_anticodon_only" : bam_counters["fail_anticodon_only"],
+    "fail_both"           : bam_counters["fail_both"],
+    "both_pass"           : bam_counters["both_pass"],
+    "cca_pass_rate"       : round(cca_rate, 4),
+    "functional_rate"     : round(functional_rate, 4),
+    "unmapped"            : fastq_counters["unmapped_written"],
 }
 
 with open(stats_path, "w") as sf:

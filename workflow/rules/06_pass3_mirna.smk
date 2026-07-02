@@ -126,8 +126,8 @@ rule mirdeep2_pass3:
 
         # Move output to expected location
         # FIX: quantifier.pl (invoked with -y {params.sample}) names its real
-        # output "miRNAs_expressed_all_samples_{sample}.csv", NOT
-        # "miRNAs_expressed_{sample}.csv". The old check here always missed,
+        # output "miRNAs_expressed_all_samples_{{sample}}.csv", NOT
+        # "miRNAs_expressed_{{sample}}.csv". The old check here always missed,
         # silently falling into the else branch and writing a header-only
         # counts file for every sample -- masking substantial real miRNA
         # signal (e.g. A549_c2_1 has 1,027 expressed miRNAs / ~13.9M reads
