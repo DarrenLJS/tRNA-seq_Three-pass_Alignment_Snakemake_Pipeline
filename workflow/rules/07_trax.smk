@@ -114,6 +114,36 @@
 #          (from 16) since parallel mapping is no longer needed here.
 #      The rm -f *.bam pre-flight step is removed from trax_quantify —
 #      those BAMs are now valid Snakemake-managed inputs, not stale files.
+# FIX HISTORY (2026-07-04):
+#  11. trax_quantify failing with MissingOutputException on
+#      {cell_line}-trnamapinfo.txt after ~6.5h of otherwise-successful TRAX
+#      analysis (A549 case: all real outputs -- readcounts, DESeq2,
+#      trnacounts, coverage, mismatches -- generated correctly; only the
+#      featuretypes.R plotting call for trnamapinfo.txt failed, logged as
+#      non-fatal by TRAX's own driver).
+#      Root cause: {cell_line}-trnamapinfo.txt is populated by mapreads.py
+#      from live bowtie2 stderr parsed during mapping (see
+#      tRAX/mapreads.py: trnamapinfo is only set inside the branch that
+#      handles a fresh bowtie2 run). Under --lazyremap (introduced in FIX
+#      10), TRAX detects the pre-built per-sample BAMs and skips the
+#      mapping step entirely for every sample, so trnamapinfo is never
+#      populated and the file is never written -- deterministically, on
+#      every cell line, every run. The output filenames declared just above
+#      (FIX comment, verified via `ls` after a "completed run") predate FIX
+#      10's introduction of --lazyremap, when processsamples.py still ran
+#      mapping internally and trnamapinfo.txt was produced normally; that
+#      output contract was never revisited when FIX 10 changed the
+#      execution mode.
+#      trnamapinfo.txt is not consumed anywhere downstream (confirmed via
+#      repo-wide grep) -- it only ever fed TRAX's own internal
+#      featuretypes.R plot. Dropping it from output: does not lose any
+#      data the pipeline actually uses; the real quantification outputs
+#      (readcounts, aminocounts, sample_file) are unaffected.
+#      Fix: removed trnacounts from trax_quantify's output:. If a
+#      trnamapinfo-equivalent summary is ever needed again, it will have to
+#      be reconstructed from saved per-sample bowtie2 logs (trax_map_sample
+#      would need to persist those) rather than from --lazyremap TRAX runs,
+#      which structurally cannot produce it.
 # =============================================================================
 
 TRAX_CFG = config["trax"]
@@ -287,11 +317,17 @@ rule trax_quantify:
         ensembl_gtf = config["references"]["ensembl_gtf"],
     output:
         # FIX: corrected filenames to match actual tRAX output (verified from
-        # ls trax/A549/A549/ after a completed run). The originally declared
-        # names (-readcounts.txt, -trnacounts.txt, -anticodoncounts.txt) do not
-        # exist; tRAX produces these instead:
+        # ls trax/A549/A549/ after a completed run, pre-dating FIX 10 /
+        # --lazyremap). The originally declared names (-readcounts.txt,
+        # -trnacounts.txt, -anticodoncounts.txt) do not exist; tRAX produces
+        # these instead:
         readcounts      = f"{SCRATCH}/trax/{{cell_line}}/{{cell_line}}/{{cell_line}}-normalizedreadcounts.txt",
-        trnacounts      = f"{SCRATCH}/trax/{{cell_line}}/{{cell_line}}/{{cell_line}}-trnamapinfo.txt",
+        # FIX 11: {cell_line}-trnamapinfo.txt removed. TRAX only populates
+        # this file from live bowtie2 stderr during mapping; --lazyremap
+        # (FIX 10) skips mapping entirely, so under lazyremap this file is
+        # NEVER produced, on any cell line, on any run. Not consumed by
+        # anything downstream in this pipeline (repo-wide grep confirms).
+        # See FIX HISTORY 11 above for full root-cause writeup.
         anticodoncounts = f"{SCRATCH}/trax/{{cell_line}}/{{cell_line}}/{{cell_line}}-aminocounts.txt",
         sample_file     = f"{SCRATCH}/trax/{{cell_line}}/trax_samples.txt",
     params:
