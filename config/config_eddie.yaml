@@ -238,8 +238,18 @@ resources:
                           # here — that's handled per-sample by trax_map_sample).
                           # 8 slots × 8000M = 64G total RSS budget.
     vmem_mb:      8000
-    runtime_min:  480     # 8h — analysis-only; observed < 2h for A549 (vs 23h total
-                          # including mapping). FIX 10: was 4320 min (72h monolithic).
+    runtime_min:  1440    # 24h — raised from 480 (8h) on 2026-07-09. THP1 quantify
+                          # (jobid 239, SGE task 56657549.2) hit the 8h h_rt wall
+                          # mid-"Counting Reads" (qacct: failed=44 execd enforced
+                          # h_rt limit, exit_status=137, wallclock=28800.196s —
+                          # i.e. killed within 0.2s of the 480 min limit). A549
+                          # completed the same analysis-only phase in < 2h, so THP1
+                          # needed meaningfully longer with the same sample count;
+                          # 24h gives generous headroom without pinpointing exactly
+                          # where it would have finished. If THP1 completes well
+                          # under 24h once rerun, consider tightening this back down
+                          # using the actual observed runtime rather than leaving
+                          # 24h as a permanent guess.
 
   build_read_assignment_summary:
     slots:        1
