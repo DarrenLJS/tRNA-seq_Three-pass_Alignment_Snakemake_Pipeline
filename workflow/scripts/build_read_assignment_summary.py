@@ -127,6 +127,18 @@ for s in cl_samples:
         row["pass1_anticodon_pass"]   = int(fstats.get("anticodon_pass",  0))
         row["pass1_functional"]       = int(fstats.get("both_pass",       0))
         row["pass1_unmapped"]         = int(fstats.get("unmapped",        0))
+        # NEW (feedback item 3): the four independent CCA x anticodon
+        # buckets, already computed in cca_anticodon_filter.py's Pass 3
+        # (FIX 2026-07-02) but not previously carried forward into this
+        # summary -- pass1_cca_pass/pass1_anticodon_pass above are each
+        # marginal totals (pass that filter regardless of the other), which
+        # cannot be used alone to plot "fail CCA only" vs "fail anticodon
+        # only" vs "fail both" vs "pass both". These four columns give the
+        # full, mutually-exclusive partition of total_aligned directly.
+        row["pass1_both_pass"]           = int(fstats.get("both_pass",           0))
+        row["pass1_fail_cca_only"]       = int(fstats.get("fail_cca_only",       0))
+        row["pass1_fail_anticodon_only"] = int(fstats.get("fail_anticodon_only", 0))
+        row["pass1_fail_both"]           = int(fstats.get("fail_both",           0))
         total = row["pass1_total_aligned"] + row["pass1_unmapped"]
         row["pass1_align_rate"]       = (
             row["pass1_total_aligned"] / total if total > 0 else 0
@@ -139,7 +151,8 @@ for s in cl_samples:
         logger.warning(f"Could not parse filter stats for {s}: {e}")
         for k in ["pass1_total_aligned","pass1_cca_pass","pass1_anticodon_pass",
                   "pass1_functional","pass1_unmapped","pass1_align_rate",
-                  "pass1_functional_rate"]:
+                  "pass1_functional_rate","pass1_both_pass","pass1_fail_cca_only",
+                  "pass1_fail_anticodon_only","pass1_fail_both"]:
             row[k] = None
 
     # ---- Pass 2 Bowtie2 stats -----------------------------------------------
