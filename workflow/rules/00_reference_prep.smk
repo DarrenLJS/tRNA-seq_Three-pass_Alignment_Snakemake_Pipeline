@@ -384,7 +384,7 @@ rule build_trax_db:
     log:
         f"{SCRATCH}/logs/00_build_trax_db.log",
     resources:
-        runtime = 60,
+        runtime = 180,
     conda:
         "../../envs/trax_env.yaml"
     shell:
