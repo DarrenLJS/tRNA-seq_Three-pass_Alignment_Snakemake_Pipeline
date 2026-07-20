@@ -12,6 +12,35 @@
 # all samples to be processed together so the same isodecoder clusters are
 # used consistently across the dataset.
 #
+# FIX (confidence-set-only alignment reference): previously this rule called
+# `mimseq --species Hsap ...` with no `-t/-o` override, which makes mim-tRNAseq
+# align against ITS OWN bundled ~620-locus GtRNAdb-derived reference -- entirely
+# decoupled from this pipeline's locally staged references.gtrndb_fasta
+# (hg38-tRNAs.fa, the ~430-locus GtRNAdb high-confidence set, confirmed by
+# convention -- this is the file build_anticodon_map/the Stage-2 whitelist are
+# built from). That meant every isodecoder-level output downstream of this rule
+# (Isodecoder_counts.txt -> DESeq2/edgeR -> volcano plots ->
+# isodecoder_highconf_intersect.tsv -> anticodon abundance bars) was silently
+# computed against a different, larger locus universe than Delta(c)/Rule 14,
+# AND the kept ~430 loci's read counts were resolved in GSNAP's ambiguous-read
+# assignment against ~190 low-confidence/pseudogene loci that were only
+# discarded after the fact.
+#
+# Now passes --trnas/--trnaout (references.gtrndb_fasta /
+# references.gtrndb_confidence_out) alongside --species. Verified against
+# mim-tRNAseq's own issue tracker that --species and --trnas/--trnaout combine
+# (species still supplies the mitochondrial tRNA set, spike-in, and
+# MODOMICS species-specific modification defaults; --trnas/--trnaout override
+# just the nuclear/cytosolic gene set used to build the GSNAP index) and that
+# --trnaout accepts the native GtRNAdb detailed .out format directly, so no
+# 9-column conversion (unlike the tRAX path) is needed here.
+#
+# CONSEQUENCE: this changes Isodecoder_counts.txt/Isoacceptor_counts.txt
+# content and isodecoder cluster membership (--cluster-id 0.97 now clusters
+# within a smaller candidate pool), so this is a real Stage-1 rerun -- the
+# whitelist, DESeq2/edgeR results, and Delta(c) all need regenerating together
+# afterward, not patched piecemeal.
+#
 # Input: all trimmed R1/R2 FASTQ pairs for the cell line
 # Key outputs:
 #   counts/Isodecoder_counts.txt   → DESeq2 isodecoder analysis
@@ -68,9 +97,17 @@ rule mimtrnaseq:
     Per-sample BAMs land at {outdir}/align/{sample}_val_1.fq.gz.unpaired_uniq.bam
     (mimseq preserves the full input filename and appends the GSNAP category suffix),
     which is where link_mimtrnaseq_bam expects to find them.
+
+    FIX: --trnas/--trnaout now point at the confidence-set-only
+    references.gtrndb_fasta / references.gtrndb_confidence_out, so the GSNAP
+    alignment reference matches the same locus universe the Stage-2 whitelist
+    is built from, instead of mim-tRNAseq's own bundled --species Hsap
+    reference. See module docstring above for the full rationale.
     """
     input:
-        r1_files = lambda wildcards: mim_input_r1(wildcards.cell_line),
+        r1_files      = lambda wildcards: mim_input_r1(wildcards.cell_line),
+        confidence_fa  = config["references"]["gtrndb_fasta"],
+        confidence_out = config["references"]["gtrndb_confidence_out"],
     output:
         iso_counts    = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/counts/Isodecoder_counts.txt",
         isoa_counts   = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/counts/Isoacceptor_counts.txt",
@@ -80,7 +117,9 @@ rule mimtrnaseq:
         outdir       = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}",
         # mimseq writes here; must not pre-exist (Snakemake creates outdir above)
         mimseq_dir   = f"{SCRATCH}/pass1_mimtrnaseq/{{cell_line}}/_run",
-        species      = config["references"]["mimtrnaseq_species"],  # 'Hsap' for hg38
+        species      = config["references"]["mimtrnaseq_species"],  # 'Hsap' for hg38 -- still
+                                                                       # supplies mito tRNAs, spike-in,
+                                                                       # and MODOMICS defaults
         threads      = MIM["threads"],
         min_cov      = MIM["min_cov"],
         max_multi    = MIM["max_multi"],
@@ -146,8 +185,20 @@ rule mimtrnaseq:
         fi
         echo "[$(date)] Using usearch: $(which usearch)" >> {log}
 
+        # FIX: --trnas/--trnaout restrict the GSNAP alignment reference to the
+        # same confidence-set-only locus universe (~430) the Stage-2 whitelist
+        # is built from, instead of mim-tRNAseq's own bundled ~620-locus
+        # --species Hsap reference. --species is kept alongside -- it still
+        # supplies the mitochondrial tRNA set, spike-in, and species-specific
+        # MODOMICS modification defaults (confirmed combinable via
+        # mim-tRNAseq's own issue tracker: --species Hsap38 --trnas ...
+        # --trnaout ... is a supported real-world invocation pattern).
+        echo "[$(date)] Using confidence-set reference: {input.confidence_fa} / {input.confidence_out}" >> {log}
+
         mimseq \
             --species           {params.species} \
+            --trnas             {input.confidence_fa} \
+            --trnaout           {input.confidence_out} \
             --cluster-id        {params.cluster_id} \
             --threads           {params.threads} \
             --min-cov           {params.min_cov} \
