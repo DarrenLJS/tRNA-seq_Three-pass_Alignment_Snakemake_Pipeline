@@ -12,6 +12,10 @@
 #      https://gtrnadb.ucsc.edu/GtRNAdb2/genomes/eukaryota/Hsapi38/
 #      Download: hg38-tRNAs.bed, hg38-tRNAs-detailed.out,
 #                hg38-tRNA-introns.bed, hg38-tRNAs.fa
+#      IMPORTANT: save the downloaded FASTA as REF["gtrndb_fasta_raw"]
+#      (e.g. hg38-tRNAs_raw.fa), NOT REF["gtrndb_fasta"]. The latter is now
+#      a derived output of rule fix_isodecoder_numbering below — see that
+#      rule's docstring for why the raw download cannot be used directly.
 #
 #   3. miRBase release 22.1
 #      wget https://www.mirbase.org/download/mature.fa
@@ -19,11 +23,74 @@
 #
 # Conda environments used
 # -----------------------
+#   Rule  00-pre   →  no conda env needed (stdlib only)
 #   Rules 00a–00e  →  ../../envs/environment.yaml  (bedtools, bowtie2, samtools)
 #   Rule  00f      →  ../../envs/trax_env.yaml      (maketraxdb.py / tRAX)
 # =============================================================================
 
 REF = config["references"]
+
+
+# ---------------------------------------------------------------------------
+# 00-pre: Renumber tRNA isodecoders in the raw GtRNAdb FASTA by exact
+#         mature-sequence identity, so mim-tRNAseq's isodecoder-name-based
+#         bookkeeping can never disagree with usearch's sequence-based
+#         clustering.
+#
+# BUG (found 2026-07-20): GtRNAdb's own isodecoder numbering does not
+# guarantee that loci sharing 100% identical mature sequence share the same
+# isodecoder number. In the hg38 high-confidence set used here, two
+# isoacceptor families exhibit this: Val-CAC-1-* / Val-CAC-5-1, and
+# Ala-AGC-2-* / Ala-AGC-7-1 — each pair/group is sequence-identical but
+# numbered as separate isodecoders.
+#
+# mim-tRNAseq's Pass 1 (rule mimtrnaseq) clusters reads with
+# `usearch -cluster_fast` at --cluster-id 0.97, which clusters purely on
+# sequence identity and has no knowledge of the isodecoder number encoded
+# in the locus name. When usearch merges all members of one isodecoder
+# entirely into a different isodecoder's cluster, mim-tRNAseq's name-based
+# bookkeeping (writeIsodecoderInfo in its splitClusters.py) looks up the
+# now-empty isodecoder and crashes:
+#     ValueError: min() arg is an empty sequence
+# (plus a related IndexError further downstream in mmQuant.py's
+# multiprocessing worker, from the same class of name/cluster-membership
+# mismatch). This is exactly what caused both A549 and THP1 to fail Pass 1
+# on 2026-07-20 after several hours of successful alignment/clustering.
+#
+# This rule renumbers isodecoders by exact sequence identity within each
+# (isotype, anticodon) isoacceptor family before mim-tRNAseq ever sees the
+# file, eliminating the possibility of that mismatch. Only the isodecoder
+# and copy-number fields in each FASTA header are changed — tRNAscan-SE ID,
+# genomic coordinates, strand, and score are left untouched, and locus
+# order in the file is preserved. See workflow/scripts/fix_isodecoder_
+# numbering.py for the full algorithm.
+#
+# hg38-tRNAs-confidence-set.out (REF["gtrndb_confidence_out"]) is NOT
+# touched by this rule or affected by the renaming: it has no name column
+# (it's keyed by chromosome + coordinates only), so it is insensitive to
+# isodecoder renumbering.
+# ---------------------------------------------------------------------------
+rule fix_isodecoder_numbering:
+    """
+    Renumber tRNA isodecoders in the raw GtRNAdb FASTA by exact mature-
+    sequence identity within each isoacceptor family. See the module-level
+    comment above and workflow/scripts/fix_isodecoder_numbering.py for
+    the full rationale and algorithm.
+    """
+    input:
+        raw_fa = REF["gtrndb_fasta_raw"],
+    output:
+        fixed_fa = REF["gtrndb_fasta"],
+        mapping  = f"{SCRATCH}/references/isodecoder_renumbering_map.tsv",
+        report   = f"{SCRATCH}/references/isodecoder_collisions_report.tsv",
+    log:
+        f"{SCRATCH}/logs/00_fix_isodecoder_numbering.log",
+    benchmark:
+        f"{SCRATCH}/benchmarks/00_fix_isodecoder_numbering.tsv",
+    resources:
+        runtime = 15,
+    script:
+        "../scripts/fix_isodecoder_numbering.py"
 
 
 # ---------------------------------------------------------------------------

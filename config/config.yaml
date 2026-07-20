@@ -21,6 +21,11 @@ references:
   # -- GtRNAdb Hsapi38 files -------------------------------------------------
   # chr-stripped versions for coordinate consistency with Ensembl FASTA
   gtrndb_bed:              "/scratch/s2906787/references/hg38-tRNAs_nochr.bed"
+  # Raw GtRNAdb download (rename the downloaded hg38-tRNAs.fa to this path —
+  # see PREREQUISITES note in 00_reference_prep.smk).
+  gtrndb_fasta_raw:        "/scratch/s2906787/references/hg38-tRNAs_raw.fa"
+  # Isodecoder-renumbered FASTA actually consumed by rule mimtrnaseq (--trnas).
+  # Built by rule fix_isodecoder_numbering from gtrndb_fasta_raw above.
   gtrndb_fasta:            "/scratch/s2906787/references/hg38-tRNAs.fa"
   gtrndb_mature:           "/scratch/s2906787/references/hg38-mature-tRNAs.fa"
   gtrndb_filtered:         "/scratch/s2906787/references/hg38-filtered-tRNAs.fa"
